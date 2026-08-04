@@ -6,12 +6,12 @@ name: Auto Scan Value Bets
 on:
   schedule:
     # Ejecutar a las 04:00 UTC (06:00 hora España en verano)
-    # Ejecutar a las 20:00 UTC (22:00 hora España en verano)
+    # Ejecutar a las 15:00 UTC (17:00 hora España en verano)
     # Nota: En invierno (desde finales de octubre), España pasa a UTC+1
     # Entonces 04:00 UTC = 05:00 España. Si quieres mantener las 06:00,
     # cambia '0 4' por '0 5' en esas fechas.
     - cron: '0 4 * * *'
-    - cron: '0 20 * * *'
+    - cron: '0 15 * * *'
   
   # Permitir ejecución manual desde la pestaña Actions de GitHub
   workflow_dispatch:
