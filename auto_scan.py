@@ -140,10 +140,24 @@ def load_team_database():
     return df_teams.set_index('Team').to_dict('index')
 
 def get_team_stats(team_name, team_db):
-    if team_name in team_db: return team_db[team_name]
+    if team_name in team_db:
+        stats = team_db[team_name]
+        # Asegurar que todos los campos necesarios existan
+        if 'Last_BTTS_Rate' not in stats:
+            stats['Last_BTTS_Rate'] = 0.50
+        return stats
     for db_team, stats in team_db.items():
-        if db_team.lower() == team_name.lower(): return stats
-    return {'Last_Form_Pts': 7, 'Last_Goals_Scored_Avg': 1.4, 'Last_Goals_Conceded_Avg': 1.4, 'Last_Over25_Rate': 0.50, 'Last_BTTS_Rate': 0.50}
+        if db_team.lower() == team_name.lower():
+            if 'Last_BTTS_Rate' not in stats:
+                stats['Last_BTTS_Rate'] = 0.50
+            return stats
+    return {
+        'Last_Form_Pts': 7,
+        'Last_Goals_Scored_Avg': 1.4,
+        'Last_Goals_Conceded_Avg': 1.4,
+        'Last_Over25_Rate': 0.50,
+        'Last_BTTS_Rate': 0.50
+    }
 
 # ==========================================
 # FUNCIONES AUXILIARES
