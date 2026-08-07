@@ -397,11 +397,11 @@ def scan_value_bets():
             if prob:
                 ev = (prob * odd) - 1
                 if ev * 100 > EV_THRESHOLD_MIN:
+                    match_dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
+                    match_dt_local = match_dt.astimezone(ZoneInfo("Europe/Madrid"))
                     value_bets.append({
                         "Liga": league,
                         "Partido": f"{home_team} vs {away_team}",
-                        match_dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
-                        match_dt_local = match_dt.astimezone(ZoneInfo("Europe/Madrid"))
                         "H inicio": match_dt_local.strftime('%d/%m %H:%M'),
                      #"Hora": commence_time[:16].replace('T', ' '),
                         "Mercado": name,
