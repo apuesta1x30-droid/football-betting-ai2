@@ -7,7 +7,7 @@ import requests
 import joblib
 import logging
 from datetime import datetime, timezone
-# from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo
 from scipy.stats import poisson
 import warnings
 warnings.filterwarnings('ignore')
@@ -285,6 +285,9 @@ def scan_value_bets():
         else:
             match_time = datetime.fromisoformat(commence_time)
         
+        # Convertir a hora de España (Madrid)
+        match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
+        
         # Solo partidos de HOY
         if match_time.date() != now.date():
             continue
@@ -393,7 +396,7 @@ def scan_value_bets():
                     value_bets.append({
                         "Liga": league,
                         "Partido": f"{home_team} vs {away_team}",
-                        "Hora": commence_time[:16].replace('T', ' '),
+                        "Hora": match_time_es.strftime('%d/%m %H:%M'),
                         "Mercado": name,
                         "Cuota": odd,
                         "Prob. IA": prob,
