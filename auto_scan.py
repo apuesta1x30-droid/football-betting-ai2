@@ -393,7 +393,7 @@ def scan_value_bets():
                     value_bets.append({
                         "Liga": league,
                         "Partido": f"{home_team} vs {away_team}",
-                         # "Hora": commence_time[:16].replace('T', ' '),
+                        "Hora": commence_time[:16].replace('T', ' '),
                         "Mercado": name,
                         "Cuota": odd,
                         "Prob. IA": prob,
