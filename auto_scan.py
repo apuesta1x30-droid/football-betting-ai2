@@ -301,7 +301,7 @@ def scan_value_bets():
     url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
     params = {
         "regions": "eu,us",
-        "markets": "h2h,totals",
+        "markets": "h2h,totals,btts",
         "oddsFormat": "decimal",
         "apiKey": THE_ODDS_API_KEY
     }
@@ -358,6 +358,7 @@ def scan_value_bets():
         
         probs_1x2 = models['1x2'].predict_proba(features)[0]
         prob_over25 = models['over25'].predict_proba(features)[0][1]
+        prob_btts = models['btts'].predict_proba(features)[0][1]  # Probabilidad de "Sí" (ambos marcan)
         dc_probs = calculate_dc_probs(probs_1x2)
         prob_ht = calculate_ht_prob(prob_over25)
         
@@ -383,6 +384,11 @@ def scan_value_bets():
                             key = f"1X2_{away_team}"
                     elif mk == "totals" and outcome["name"] == "Over" and outcome.get("point", 2.5) in [1.5, 2.5, 3.5]:
                         key = f"Over_{outcome.get('point')}"
+                    elif mk == "btts":
+                        if outcome["name"] == "Yes":
+                            key = "BTTS_Yes"
+                        elif outcome["name"] == "No":
+                            key = "BTTS_No"
                     if key and (key not in best_odds or odd > best_odds[key]):
                         best_odds[key] = odd
         
@@ -427,6 +433,12 @@ def scan_value_bets():
                     prob, name = models['over25'].predict_proba(features)[0][1], "Over 2.5 Goles"
                 elif p == 3.5:
                     prob, name = models['over35'].predict_proba(features)[0][1], "Over 3.5 Goles"
+            elif mk.startswith("BTTS_"):
+                btts_type = mk.split("_")[1]
+                if btts_type == "Yes":
+                    prob, name = prob_btts, "BTTS - Sí (Ambos marcan)"
+                elif btts_type == "No":
+                    prob, name = 1 - prob_btts, "BTTS - No"
             elif mk.startswith("DC_"):
                 tp = mk.replace("DC_", "").replace("_CALC", "")
                 prob, name = dc_probs[tp], f"Doble Oportunidad - {tp}"
