@@ -103,7 +103,8 @@ def format_value_bet_alert(vb):
 
 def format_summary_message(stats, value_bets):
     """Formatea el resumen del escaneo."""
-    now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
+   now = datetime.now(ZoneInfo("Europe/Madrid")).strftime('%d/%m/%Y %H:%M')
+ # now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
     high_ev = len([vb for vb in value_bets if vb['EV (%)'] >= 10])
     return f"""
 📊 <b>RESUMEN DEL ESCANEO</b>
