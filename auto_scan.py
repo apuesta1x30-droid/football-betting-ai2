@@ -1,9 +1,3 @@
-"""
- Football Betting AI - Escaneo Automático
-Ejecutado por GitHub Actions 2 veces al día
-Envía notificaciones a Telegram cuando EV > 10%
-"""
-
 import os
 import sys
 import time
@@ -13,7 +7,7 @@ import requests
 import joblib
 import logging
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+# from zoneinfo import ZoneInfo
 from scipy.stats import poisson
 import warnings
 warnings.filterwarnings('ignore')
@@ -103,9 +97,9 @@ def format_value_bet_alert(vb):
 
 def format_summary_message(stats, value_bets):
     """Formatea el resumen del escaneo."""
-   now = datetime.now(ZoneInfo("Europe/Madrid")).strftime('%d/%m/%Y %H:%M')
- # now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
+    now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
     high_ev = len([vb for vb in value_bets if vb['EV (%)'] >= 10])
+    
     return f"""
 📊 <b>RESUMEN DEL ESCANEO</b>
 📅 {now}
@@ -396,13 +390,10 @@ def scan_value_bets():
             if prob:
                 ev = (prob * odd) - 1
                 if ev * 100 > EV_THRESHOLD_MIN:
-                  #  match_dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
-                   # match_dt_local = match_dt.astimezone(ZoneInfo("Europe/Madrid"))
                     value_bets.append({
                         "Liga": league,
                         "Partido": f"{home_team} vs {away_team}",
-                      #  "H inicio": match_dt_local.strftime('%d/%m %H:%M'),
-                     "Hora": commence_time[:16].replace('T', ' '),
+                        "Hora": commence_time[:16].replace('T', ' '),
                         "Mercado": name,
                         "Cuota": odd,
                         "Prob. IA": prob,
@@ -424,8 +415,7 @@ def scan_value_bets():
                 send_telegram_message(format_value_bet_alert(vb))
                 time.sleep(0.5)
     else:
-         send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
-       # send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(ZoneInfo('Europe/Madrid')).strftime('%d/%m/%Y %H:%M')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
+        send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
 
 # ==========================================
 # EJECUCIÓN
