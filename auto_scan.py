@@ -110,10 +110,10 @@ def format_value_bet_alert(vb):
     # ==========================================
     partido = vb['Partido']
     # Enlaces a búsqueda especializada en Flashscore y Sofascore
-partido_url = partido.replace(' ', '+')
-enlace_flash = f"https://www.google.com/search?q={partido_url}+site:flashscore.com"
-enlace_sofa = f"https://www.google.com/search?q={partido_url}+site:sofascore.com"
-enlaces_html = f' <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
+    partido_url = partido.replace(' ', '+')
+    enlace_flash = f"https://www.google.com/search?q={partido_url}+site:flashscore.com"
+    enlace_sofa = f"https://www.google.com/search?q={partido_url}+site:sofascore.com"
+    enlaces_html = f' <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
     
     # ==========================================
     # MENSAJE FINAL
