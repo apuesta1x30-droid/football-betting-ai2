@@ -110,10 +110,10 @@ def format_value_bet_alert(vb):
     # ==========================================
     partido = vb['Partido']
     # Enlaces a Flashscore y Sofascore
-partido_url = partido.replace(' ', '+')
-enlace_flash = f"https://www.flashscore.com/search/?q={partido_url}"
-enlace_sofa = f"https://www.sofascore.com/search?term={partido_url}"
-enlaces_html = f'🔗 <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
+    partido_url = partido.replace(' ', '+')
+    enlace_flash = f"https://www.flashscore.com/search/?q={partido_url}"
+    enlace_sofa = f"https://www.sofascore.com/search?term={partido_url}"
+    enlaces_html = f'🔗 <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
     
     # ==========================================
     # MENSAJE FINAL
@@ -132,7 +132,7 @@ enlaces_html = f'🔗 <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace
 
 💚 <b>EV: +{vb['EV (%)']:.1f}%</b>
 {kelly_text}
-{enlace_html}
+{enlaces_html}
 🔖 Fuente: {vb.get('Fuente', 'N/A')}
 
 <i>Apuesta con responsabilidad. Gestiona tu banca. By MAM</i>
