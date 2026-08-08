@@ -69,14 +69,53 @@ def send_telegram_message(message, parse_mode="HTML"):
         return False
 
 def format_value_bet_alert(vb):
-    """Formatea una Value Bet para alerta de Telegram."""
+    """Formatea una Value Bet para alerta de Telegram con Kelly y enlace."""
+    
+    # Determinar nivel de valor
     if vb['EV (%)'] >= 20:
         emoji, level = "🚀", "EXCEPCIONAL"
     elif vb['EV (%)'] >= 10:
-        emoji, level = "🟢", "ALTO"
+        emoji, level = "", "ALTO"
     else:
         emoji, level = "🟡", "MODERADO"
     
+    # ==========================================
+    # CÁLCULO DEL CRITERIO DE KELLY (1/4)
+    # ==========================================
+    prob = vb['Prob. IA']
+    cuota = vb['Cuota']
+    
+    # Fórmula de Kelly: (b*p - q) / b
+    # Donde b = cuota - 1, p = probabilidad, q = 1 - p
+    b = cuota - 1
+    p = prob
+    q = 1 - prob
+    
+    kelly_completo = (b * p - q) / b
+    
+    # Usamos Kelly fraccionado (1/4) para reducir volatilidad
+    kelly_fraccionado = kelly_completo / 4
+    
+    # Limitar entre 1% y 10% (gestión responsable)
+    kelly_final = max(1.0, min(10.0, kelly_fraccionado * 100))
+    
+    # Solo mostrar si el EV es positivo
+    if kelly_completo > 0:
+        kelly_text = f"💰 <b>Stake recomendado:</b> {kelly_final:.1f}% de tu banca (Kelly 1/4)"
+    else:
+        kelly_text = "⚠️ <b>EV negativo:</b> No apostar"
+    
+    # ==========================================
+    # ENLACE DIRECTO AL PARTIDO
+    # ==========================================
+    partido = vb['Partido']
+    # Crear enlace de búsqueda en Google (siempre funciona)
+    enlace = f"https://www.google.com/search?q={partido.replace(' ', '+')}+resultado+en+directo"
+    enlace_html = f'🔗 <a href="{enlace}">Ver partido en directo</a>'
+    
+    # ==========================================
+    # MENSAJE FINAL
+    # ==========================================
     return f"""
 {emoji} <b>VALUE BET {level}</b> {emoji}
 
@@ -90,9 +129,11 @@ def format_value_bet_alert(vb):
 📉 <b>Prob. Casa:</b> {vb['Prob. Casa']:.1%}
 
 💚 <b>EV: +{vb['EV (%)']:.1f}%</b>
- Fuente: {vb.get('Fuente', 'N/A')}
+{kelly_text}
+{enlace_html}
+🔖 Fuente: {vb.get('Fuente', 'N/A')}
 
-<i>Apuesta con responsabilidad. Gestiona tu banca.</i>
+<i>Apuesta con responsabilidad. Gestiona tu banca. By MAM</i>
 """.strip()
 
 def format_summary_message(stats, value_bets):
