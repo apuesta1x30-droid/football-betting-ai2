@@ -301,7 +301,7 @@ def scan_value_bets():
     url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
     params = {
         "regions": "eu,us",
-        "markets": "h2h,totals,btts",
+        "markets": "h2h,totals",
         "oddsFormat": "decimal",
         "apiKey": THE_ODDS_API_KEY
     }
@@ -414,6 +414,24 @@ def scan_value_bets():
             stats['calculated'] += 1
         
         # Calcular EV
+        # BTTS (Ambos marcan) - desde API-Football
+        # API-Football market ID para BTTS es 8
+        btts_yes_api = api_odds.get('8_Yes')
+        btts_no_api = api_odds.get('8_No')
+        
+        if btts_yes_api and MIN_ODD <= btts_yes_api <= MAX_ODD:
+            best_odds['BTTS_Yes'] = btts_yes_api
+            stats['api_football'] += 1
+        elif MIN_ODD <= (1/prob_btts) <= MAX_ODD:
+            best_odds['BTTS_Yes_CALC'] = 1/prob_btts
+            stats['calculated'] += 1
+        
+        if btts_no_api and MIN_ODD <= btts_no_api <= MAX_ODD:
+            best_odds['BTTS_No'] = btts_no_api
+            stats['api_football'] += 1
+        elif MIN_ODD <= (1/(1-prob_btts)) <= MAX_ODD:
+            best_odds['BTTS_No_CALC'] = 1/(1-prob_btts)
+            stats['calculated'] += 1
         for mk, odd in best_odds.items():
             prob, name, is_calc = None, None, '_CALC' in mk
             
