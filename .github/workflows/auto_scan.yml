@@ -11,7 +11,7 @@ on:
     # Entonces 04:00 UTC = 05:00 España. Si quieres mantener las 06:00,
     # cambia '0 4' por '0 5' en esas fechas.
     - cron: '15 4 * * *'
-    - cron: '30 14 * * *'
+    - cron: '15 14 * * *'
   
   # Permitir ejecución manual desde la pestaña Actions de GitHub
   workflow_dispatch:
