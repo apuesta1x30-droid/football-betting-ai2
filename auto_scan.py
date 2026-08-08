@@ -109,9 +109,11 @@ def format_value_bet_alert(vb):
     # ENLACE DIRECTO AL PARTIDO
     # ==========================================
     partido = vb['Partido']
-    # Crear enlace de búsqueda en Google (siempre funciona)
-    enlace = f"https://www.google.com/search?q={partido.replace(' ', '+')}+resultado+en+directo"
-    enlace_html = f'🔗 <a href="{enlace}">Ver partido en directo</a>'
+    # Enlaces a Flashscore y Sofascore
+partido_url = partido.replace(' ', '+')
+enlace_flash = f"https://www.flashscore.com/search/?q={partido_url}"
+enlace_sofa = f"https://www.sofascore.com/search?term={partido_url}"
+enlaces_html = f'🔗 <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
     
     # ==========================================
     # MENSAJE FINAL
