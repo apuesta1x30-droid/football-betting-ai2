@@ -57,11 +57,10 @@ def get_sports_map(tracker):
 def market_target(mercado, home, away):
     """Devuelve (market_key, outcome_name, point) o None si el mercado no tiene cierre."""
     m = _norm(mercado)
+    # Mercados de 1ª Parte no tienen endpoint de cierre fiable en The Odds API v4.
     if '1a parte' in m or 'primera parte' in m:
-        mo = re.search(r'over\s+(\d+(?:\.\d+)?)', m)
-        if mo:
-            return ('totals_h1', 'Over', float(mo.group(1)))
-        return None
+    return None
+    
     mo = re.match(r'over\s+(\d+(?:\.\d+)?)\s+goles', m)
     if mo:
         return ('totals', 'Over', float(mo.group(1)))
@@ -137,7 +136,7 @@ def run(test=False):
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds",
                 params={"apiKey": THE_ODDS_API_KEY, "regions": "eu,us",
-                        "markets": "h2h,totals,totals_h1", "oddsFormat": "decimal"},
+                        "markets": "h2h,totals", "oddsFormat": "decimal"},
                 timeout=15)
             if r.status_code != 200:
                 logger.error(f"❌ The Odds API ({liga}): HTTP {r.status_code} · {r.text[:200]}")
