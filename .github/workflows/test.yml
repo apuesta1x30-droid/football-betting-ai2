@@ -1,7 +1,6 @@
 name: Test Stats Module
 
 on:
-  # Permitir ejecución manual desde la pestaña "Actions"
   workflow_dispatch:
 
 jobs:
@@ -22,13 +21,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Run stats test
+    - name: Run integration test
+      env:
+        SUPABASE_URL_FB: ${{ secrets.SUPABASE_URL_FB }}
+        SUPABASE_KEY_FB: ${{ secrets.SUPABASE_KEY_FB }}
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       run: python test_stats.py
-    
-    - name: Upload test database (opcional)
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-database
-        path: picks_history.db
-        retention-days: 7
