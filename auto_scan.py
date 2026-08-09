@@ -61,13 +61,13 @@ def send_telegram_message(message, parse_mode="HTML"):
         response = requests.post(url, json=data, timeout=10)
         if response.status_code == 200:
             logger.info("✅ Notificación enviada a Telegram")
-            return True
+            return response.json().get('result', {}).get('message_id')
         else:
             logger.error(f"❌ Error Telegram: {response.text}")
-            return False
+            return None
     except Exception as e:
         logger.error(f"❌ Error enviando Telegram: {e}")
-        return False
+        return None
 
 def format_value_bet_alert(vb):
     if vb['EV (%)'] >= 20:
@@ -447,12 +447,6 @@ def scan_value_bets():
     # ✅ NUEVO: REGISTRAR TODOS LOS PICKS EN BD
     # ==========================================
     tracker = StatsTracker()
-    registered_count = 0
-    if value_bets:
-        for vb in value_bets:
-            if tracker.register_pick(vb):
-                registered_count += 1
-        logger.info(f"💾 {registered_count} picks registrados en base de datos")
     
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets))
@@ -463,7 +457,9 @@ def scan_value_bets():
         )[:10]
         if top10:
             for vb in top10:
-                send_telegram_message(format_value_bet_alert(vb))
+                msg_id = send_telegram_message(format_value_bet_alert(vb))
+                if msg_id:
+                    vb['Telegram Msg ID'] = msg_id
                 time.sleep(0.5)
         else:
             # Hay value bets en BD, pero ninguna supera el umbral de notificación
@@ -473,6 +469,13 @@ def scan_value_bets():
                 f"pero ninguna supera el umbral de notificación (EV ≥ {EV_THRESHOLD_NOTIFY:.0f}%).\n\n"
                 f"💡 Mercado eficiente en las próximas horas."
             )
+        
+        # Registro en BD después del envío (para guardar el message_id de Telegram)
+        registered_count = 0
+        for vb in value_bets:
+            if tracker.register_pick(vb):
+                registered_count += 1
+        logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
         send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
 
