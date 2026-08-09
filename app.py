@@ -587,7 +587,7 @@ if hist_stats['settled'] > 0:
         if gap > 5:
             st.warning(f"⚠️ El modelo SOBREESTIMA el valor en **{gap:+.1f} pp**. Los picks prometen más de lo que entregan.")
         elif gap < -5:
-            st.success(f"✅ El modelo es CONSERVADOR en **{abs(gap):.1f} pp}. Mejor de lo esperado.")
+            st.success(f"✅ El modelo es CONSERVADOR en **{abs(gap):.1f} pp**. Mejor de lo esperado.")
         else:
             st.info(f"✅ Calibración correcta (gap: {gap:+.1f} pp)")
     
