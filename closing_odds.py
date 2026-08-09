@@ -59,8 +59,7 @@ def market_target(mercado, home, away):
     m = _norm(mercado)
     # Mercados de 1ª Parte no tienen endpoint de cierre fiable en The Odds API v4.
     if '1a parte' in m or 'primera parte' in m:
-    return None
-    
+        return None
     mo = re.match(r'over\s+(\d+(?:\.\d+)?)\s+goles', m)
     if mo:
         return ('totals', 'Over', float(mo.group(1)))
