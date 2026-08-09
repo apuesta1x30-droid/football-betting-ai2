@@ -119,7 +119,7 @@ def test_full_workflow():
         status = results[i]
         if tracker.settle_pick(pick['id'], status):
             print(f"  ✓ Pick #{pick['id']} liquidado: {status}")
-            print(f"    → {pick['Partido']} | {pick['Mercado']} @ {pick['cuota']}")
+            print(f"    → {pick['partido']} | {pick['mercado']} @ {pick['cuota']}")
     
     # ==========================================
     # 4. CALCULAR ESTADÍSTICAS
