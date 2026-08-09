@@ -1,0 +1,91 @@
+"""
+Informes de rendimiento para Telegram (v0.3).
+Funciones compartidas por el bot de comandos y el resumen semanal.
+"""
+from datetime import datetime, timedelta, timezone
+
+
+def compute_for(picks):
+    """Métricas sobre una lista de picks (dicts de Supabase)."""
+    settled = [p for p in picks if p['status'] in ('won', 'lost')]
+    n = len(settled)
+    wins = sum(1 for p in settled if p['status'] == 'won')
+    losses = n - wins
+    pnl = sum(((p['cuota'] or 0) - 1) if p['status'] == 'won' else -1 for p in settled)
+    hit = (wins / n * 100) if n else 0.0
+    yld = (pnl / n * 100) if n else 0.0
+    evs = [p['ev_percentage'] for p in settled if p['ev_percentage'] is not None]
+    bs = [(p['prob_ia'] - (1 if p['status'] == 'won' else 0)) ** 2
+          for p in settled if p['prob_ia'] is not None]
+    return {
+        'total': len(picks),
+        'settled': n,
+        'wins': wins,
+        'losses': losses,
+        'pending': len(picks) - n,
+        'pnl': pnl,
+        'yield_pct': yld,
+        'hit': hit,
+        'brier': (sum(bs) / len(bs)) if bs else None,
+        'gap': ((sum(evs) / len(evs)) - yld) if evs else None,
+    }
+
+
+def picks_settled_since(tracker, days):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    out = []
+    for p in tracker.get_all_picks():
+        if p['status'] not in ('won', 'lost') or not p.get('settled_at'):
+            continue
+        try:
+            dt = datetime.fromisoformat(p['settled_at'])
+        except Exception:
+            continue
+        if dt >= cutoff:
+            out.append(p)
+    return out
+
+
+def market_pnl(picks):
+    agg = {}
+    for p in picks:
+        m = p['mercado'] or 'Desconocido'
+        agg[m] = agg.get(m, 0.0) + (((p['cuota'] or 0) - 1) if p['status'] == 'won' else -1)
+    return agg
+
+
+def fmt_stats(s, title):
+    L = [f"📊 <b>{title}</b>", ""]
+    L.append(f"🔎 Picks: <b>{s['total']}</b>  (✅ {s['wins']} · ❌ {s['losses']} · ⏳ {s['pending']})")
+    if s['settled']:
+        L.append(f"🎯 Hit rate: <b>{s['hit']:.1f}%</b>")
+        L.append(f"💰 PnL: <b>{s['pnl']:+.2f} u</b> · 📈 Yield: <b>{s['yield_pct']:+.1f}%</b>")
+        if s['brier'] is not None:
+            L.append(f"🎲 Brier: {s['brier']:.3f}")
+        if s['gap'] is not None:
+            L.append(f"⚖️ Calibración IA−real: {s['gap']:+.1f} pp")
+    else:
+        L.append("⏳ Aún sin picks liquidados.")
+    return "\n".join(L)
+
+
+def fmt_weekly(week_picks, all_stats):
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=7)
+    s = compute_for(week_picks)
+    L = ["🗓️ <b>RESUMEN SEMANAL</b>", f"📅 {since:%d/%m} – {now:%d/%m}", ""]
+    if not week_picks:
+        L.append("💤 Sin picks liquidados esta semana.")
+    else:
+        L.append(f"🔎 Liquidados: <b>{s['settled']}</b>  (✅ {s['wins']} · ❌ {s['losses']})")
+        L.append(f"🎯 Hit rate: <b>{s['hit']:.1f}%</b>")
+        L.append(f"💰 PnL semana: <b>{s['pnl']:+.2f} u</b> · 📈 Yield: <b>{s['yield_pct']:+.1f}%</b>")
+        agg = market_pnl(week_picks)
+        if agg:
+            bm = max(agg, key=agg.get)
+            wm = min(agg, key=agg.get)
+            L.append(f"🏆 Mejor mercado: <b>{bm}</b> ({agg[bm]:+.2f} u)")
+            L.append(f"📉 Peor mercado: <b>{wm}</b> ({agg[wm]:+.2f} u)")
+    L.append("")
+    L.append(f"💼 Acumulado: PnL <b>{all_stats['pnl']:+.2f} u</b> · Yield <b>{all_stats['yield_pct']:+.1f}%</b>")
+    return "\n".join(L)
