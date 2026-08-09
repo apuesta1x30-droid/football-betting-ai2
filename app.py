@@ -4,6 +4,7 @@ import numpy as np
 import requests
 import joblib
 import warnings
+import plotly.graph_objects as go
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
@@ -388,9 +389,6 @@ with st.expander("❓ ¿Qué es el Expected Value (EV)? - Guía completa", expan
     | **EV 5-10%** | 🟡 Valor MUY BUENO | Apuesta recomendada |
     | **EV 2-5%** | ⚪ Valor MODERADO | Apuesta opcional |
     | **EV < 2%** | 🔴 Sin valor | NO apostar |
-    
-    ### 💡 Ejemplo: Cuota 2.75 con Prob. IA 53.2%
-    EV = (0.532 × 2.75) - 1 = **+46.3%**
     """)
 
 st.sidebar.header("⚙️ Configuración")
@@ -433,7 +431,6 @@ if st.button("🔄 Escanear Todos los Mercados Ahora"):
         if fixtures:
             df_bets, stats = analyze_multi_market(models, fixtures, team_db, min_odd=min_odd, max_odd=max_odd, only_today=only_today)
             
-            # ✅ REGISTRAR TODOS LOS PICKS EN BD
             tracker_register = StatsTracker()
             registered = 0
             if not df_bets.empty:
@@ -556,7 +553,7 @@ if 'df_bets' in st.session_state:
         st.info("No hay resultados para mostrar con los filtros actuales.")
 
 # ==========================================
-# ✅ NUEVA SECCIÓN: ESTADÍSTICAS HISTÓRICAS
+# ESTADÍSTICAS HISTÓRICAS
 # ==========================================
 st.markdown("---")
 st.subheader("📈 Estadísticas Históricas")
@@ -607,9 +604,86 @@ if hist_stats['settled'] > 0:
 
 elif hist_stats['total'] > 0:
     st.info(f"📊 Hay **{hist_stats['total']} picks registrados** pero ninguno liquidado aún.")
-    st.info("💡 Los picks se liquidarán cuando se implemente la v0.2 (liquidación automática con API-Football) o manualmente.")
+    st.info("💡 Los picks se liquidan automáticamente con los cron de liquidación (07:15 y 13:15 UTC).")
 else:
     st.info("📊 Aún no hay picks registrados. Los picks se guardarán a partir del próximo escaneo.")
+
+# ==========================================
+# GRÁFICOS DE EVOLUCIÓN (v0.4-C)
+# ==========================================
+st.markdown("---")
+st.subheader("📉 Gráficos de Evolución")
+st.caption("Evolución temporal del rendimiento REAL (picks liquidados)")
+
+picks_hist = tracker.get_all_picks()
+settled_hist = sorted(
+    [p for p in picks_hist if p['status'] in ('won', 'lost')],
+    key=lambda p: p.get('settled_at') or p.get('timestamp') or ''
+)
+
+if len(settled_hist) < 2:
+    st.info("📈 Los gráficos aparecerán en cuanto haya al menos 2 picks liquidados.")
+else:
+    xs = list(range(1, len(settled_hist) + 1))
+    cum_pnl, acc = [], 0.0
+    flags = []
+    cum_pia, cum_hit = [], []
+    sum_pia, wins_acc = 0.0, 0
+    
+    for i, p in enumerate(settled_hist):
+        acc += (p['cuota'] - 1) if p['status'] == 'won' else -1.0
+        cum_pnl.append(round(acc, 2))
+        w = 1 if p['status'] == 'won' else 0
+        wins_acc += w
+        flags.append(w)
+        if p['prob_ia'] is not None:
+            sum_pia += p['prob_ia']
+        cum_pia.append((sum_pia / (i + 1)) * 100)
+        cum_hit.append((wins_acc / (i + 1)) * 100)
+    
+    W = 10
+    rolling_hit = [
+        sum(flags[max(0, i - W + 1): i + 1]) / len(flags[max(0, i - W + 1): i + 1]) * 100
+        for i in range(len(flags))
+    ]
+    overall_hit = sum(flags) / len(flags) * 100
+    
+    # Gráfico 1: PnL acumulado
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(x=xs, y=cum_pnl, mode='lines+markers',
+                              name='PnL acumulado',
+                              line=dict(color='#2ecc71', width=2.5)))
+    fig1.add_hline(y=0, line_dash='dash', line_color='gray')
+    fig1.update_layout(title='💰 PnL acumulado (unidades, stake=1)',
+                       xaxis_title='Pick liquidado nº', yaxis_title='Unidades',
+                       margin=dict(t=50, b=40))
+    st.plotly_chart(fig1, use_container_width=True)
+    
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        # Gráfico 2: Hit rate rodante
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=xs, y=rolling_hit, mode='lines',
+                                  name='Hit rate rodante (10)',
+                                  line=dict(color='#3498db', width=2)))
+        fig2.add_hline(y=overall_hit, line_dash='dot', line_color='green')
+        fig2.update_layout(title=f'🎯 Hit rate rodante (global: {overall_hit:.1f}%)',
+                           xaxis_title='Pick liquidado nº', yaxis_title='%',
+                           margin=dict(t=50, b=40))
+        st.plotly_chart(fig2, use_container_width=True)
+    with col_g2:
+        # Gráfico 3: Calibración acumulada
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=xs, y=cum_pia, mode='lines',
+                                  name='Prob. IA prometida',
+                                  line=dict(color='#e67e22', width=2)))
+        fig3.add_trace(go.Scatter(x=xs, y=cum_hit, mode='lines',
+                                  name='Hit rate real',
+                                  line=dict(color='#27ae60', width=2)))
+        fig3.update_layout(title='⚖️ Calibración: prometido vs real',
+                           xaxis_title='Pick liquidado nº', yaxis_title='%',
+                           margin=dict(t=50, b=40))
+        st.plotly_chart(fig3, use_container_width=True)
 
 st.markdown("---")
 st.markdown("""
