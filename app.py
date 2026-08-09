@@ -634,6 +634,11 @@ with st.expander("❓ Cómo leer estos gráficos - Guía rápida", expanded=Fals
     - Si la naranja se separa **por encima** de la verde: la IA promete más de lo que cumple → exige más EV o baja stakes.
     - Si van **pegadas** (±10 pp): sistema bien calibrado, confía en los EV declarados.
     - Si la verde va **por encima**: la IA es conservadora; el sistema rinde más de lo que anuncia.
+
+    ### 🔻 CLV medio acumulado
+    - **CLV** = (cuota tomada / cuota de cierre − 1). Mide si bates al mercado.
+    - **Línea morada por encima de 0** = encuentras valor antes que la casa → señal de rentabilidad a largo plazo, incluso si el PnL corto es negativo.
+    - **Línea morada por debajo de 0** = tus cuotas no baten al cierre → el "valor" puede ser ruido del modelo.
     """)
 
 picks_hist = tracker.get_all_picks()
@@ -705,6 +710,53 @@ else:
                            xaxis_title='Pick liquidado nº', yaxis_title='%',
                            margin=dict(t=50, b=40))
         st.plotly_chart(fig3, use_container_width=True)
+
+# ==========================================
+# CLV (v0.4-D Parte 2)
+# ==========================================
+st.markdown("---")
+st.subheader("🔻 Closing Line Value (CLV)")
+st.caption("¿Bates al mercado? CLV = (cuota tomada / cuota de cierre − 1). Positivo = encuentras valor antes que la casa.")
+
+clv_picks = [p for p in picks_hist if p.get('closing_odds') and p.get('cuota')]
+
+if not clv_picks:
+    st.info("🔻 El CLV aparecerá en cuanto los cron de Closing Odds (08/14/20 UTC) capturen cuotas de cierre.")
+else:
+    clv_sorted = sorted(
+        clv_picks,
+        key=lambda p: p.get('captured_closing_at') or p.get('timestamp') or ''
+    )
+    clvs = [((p['cuota'] / p['closing_odds']) - 1) * 100 for p in clv_sorted]
+    avg_clv = sum(clvs) / len(clvs)
+    beat = sum(1 for c in clvs if c > 0)
+    beat_pct = beat / len(clvs) * 100
+    
+    cum_clv = []
+    acc = 0.0
+    for i, c in enumerate(clvs):
+        acc += c
+        cum_clv.append(acc / (i + 1))
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🔻 CLV medio", f"{avg_clv:+.1f}%")
+    c2.metric("🎯 Bate al cierre", f"{beat_pct:.0f}% ({beat}/{len(clvs)})")
+    c3.metric("📊 Picks con cierre", len(clv_picks))
+    
+    if avg_clv > 0:
+        st.success("✅ CLV positivo: estás encontrando valor antes que el mercado. Señal de rentabilidad a largo plazo.")
+    else:
+        st.warning("⚠️ CLV negativo o nulo: tus cuotas no baten al cierre. Revisa umbrales de EV.")
+    
+    fig4 = go.Figure()
+    fig4.add_trace(go.Scatter(x=list(range(1, len(cum_clv) + 1)), y=cum_clv,
+                              mode='lines+markers', name='CLV medio acumulado',
+                              line=dict(color='#9b59b6', width=2.5)))
+    fig4.add_hline(y=0, line_dash='dash', line_color='gray')
+    fig4.update_layout(title='🔻 CLV medio acumulado (%)',
+                       xaxis_title='Pick con cierre nº', yaxis_title='%',
+                       margin=dict(t=50, b=40))
+    st.plotly_chart(fig4, use_container_width=True)
 
 st.markdown("---")
 st.markdown("""
