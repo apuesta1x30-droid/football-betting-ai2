@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Variables de entorno (desde GitHub Secrets)
 THE_ODDS_API_KEY = os.getenv('THE_ODDS_API_KEY', '')
-API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '00599a23daf70c08d47f1db56dfe5eb5')
+API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
