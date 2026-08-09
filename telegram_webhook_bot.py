@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-v0.3-A + afinado · Bot de comandos de Telegram por WEBHOOK (microservicio Render).
-Comandos: /stats /week /today /market /scan /app /help
+Bot de comandos de Telegram por WEBHOOK (microservicio Render).
+Comandos: /stats /week /today /pending /market /scan /app /help
+Además: reacciones 👌 (won) / 👎 (lost) sobre las alertas = liquidación manual.
 Solo responde al chat TELEGRAM_CHAT_ID (seguridad).
-Al arrancar registra el webhook y el botón Menú (setMyCommands).
 """
 import os
 import logging
@@ -25,11 +25,11 @@ APP_URL = "https://football-betting-ai2-xay2ankt3xzaecxpbu6nwf.streamlit.app/"
 
 app = Flask(__name__)
 
-# Botón "Menú" de Telegram (setMyCommands)
 COMMANDS = [
     {"command": "stats", "description": "📊 Rendimiento acumulado"},
     {"command": "week", "description": "🗓️ Resumen últimos 7 días"},
     {"command": "today", "description": "📅 Picks de hoy"},
+    {"command": "pending", "description": "⏳ Pendientes de liquidar"},
     {"command": "market", "description": "🎯 Rendimiento por mercado"},
     {"command": "scan", "description": "🔄 Lanzar escaneo ahora"},
     {"command": "app", "description": "🌐 Abrir dashboard"},
@@ -42,11 +42,15 @@ HELP = """
 /stats → rendimiento acumulado
 /week → resumen de los últimos 7 días
 /today → picks registrados hoy
+/pending → picks pendientes de liquidar
 /market BTTS → rendimiento de un mercado
 /market → lista de mercados con datos
 /scan → lanzar un escaneo manual ahora
 /app → abrir el dashboard
 /help → este menú
+
+🤙 <b>Liquidación rápida</b>: reacciona a una alerta con
+👌 = acertada (WON) · 👎 = fallada (LOST)
 """.strip()
 
 
@@ -66,12 +70,38 @@ def tg(method, **data):
 
 
 def _run_scan_async():
-    """Escaneo manual en segundo plano (envía sus propios mensajes)."""
     try:
         from auto_scan import scan_value_bets
         scan_value_bets()
     except Exception as e:
         logger.error(f"❌ Error en escaneo manual: {e}")
+
+
+def handle_reaction(reaction):
+    """👌 = won · 👎 = lost, sobre el pick asociado al mensaje reaccionado."""
+    msg_id = reaction.get('message_id')
+    new = reaction.get('new_reaction') or []
+    emojis = [r.get('emoji') for r in new if r.get('type') == 'emoji']
+    status = 'won' if '👌' in emojis else ('lost' if '👎' in emojis else None)
+    if not status or not msg_id:
+        return
+    
+    tracker = StatsTracker()
+    if not tracker.enabled:
+        return
+    resp = tracker.client.table(tracker.table).select('*').eq('telegram_message_id', msg_id).execute()
+    if not resp.data:
+        return
+    pick = resp.data[0]
+    if pick['status'] != 'pending':
+        return  # ya liquidado por el cron: la reacción no pisa datos reales
+    
+    tracker.settle_pick(pick['id'], status)
+    emoji = '✅' if status == 'won' else '❌'
+    logger.info(f"🤝 Reacción → #{pick['id']} {pick['partido']} = {status}")
+    tg('sendMessage', chat_id=CHAT_ID,
+       text=f"📝 <b>Liquidado manualmente</b>\n{pick['partido']} · {pick['mercado']} → {emoji} {status.upper()}",
+       parse_mode='HTML')
 
 
 @app.route('/')
@@ -82,32 +112,39 @@ def health():
 @app.route('/telegram', methods=['POST'])
 def telegram():
     update = request.get_json(silent=True) or {}
+    
+    # 1) Reacciones a mensajes del bot (liquidación manual)
+    reaction = update.get('message_reaction')
+    if reaction:
+        if str(((reaction.get('user') or {}).get('id', ''))) == CHAT_ID:
+            handle_reaction(reaction)
+        return jsonify(ok=True)
+    
+    # 2) Mensajes de texto con comandos
     message = update.get('message') or update.get('edited_message') or {}
     chat_id = str((message.get('chat') or {}).get('id', ''))
     text = (message.get('text') or '').strip()
-
+    
     logger.info(f"📨 Recibido: chat_id={chat_id}, text={text}, CHAT_ID={CHAT_ID}")
-
+    
     if chat_id != CHAT_ID or not text.startswith('/'):
         return jsonify(ok=True)
-
+    
     cmd = text.split()[0].lower().split('@')[0]
-
-    # /app → botón inline con el dashboard
+    
     if cmd == '/app':
         tg('sendMessage', chat_id=CHAT_ID,
            text="🌐 <b>Dashboard Value Bet Scanner</b>", parse_mode='HTML',
            reply_markup={"inline_keyboard": [[{"text": "🌐 Abrir scanner", "url": APP_URL}]]})
         return jsonify(ok=True)
-
-    # /scan → escaneo manual en segundo plano
+    
     if cmd == '/scan':
         threading.Thread(target=_run_scan_async, daemon=True).start()
         tg('sendMessage', chat_id=CHAT_ID,
            text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
            parse_mode='HTML')
         return jsonify(ok=True)
-
+    
     reply = handle(text)
     if reply:
         tg('sendMessage', chat_id=CHAT_ID, text=reply, parse_mode='HTML')
@@ -117,22 +154,22 @@ def telegram():
 def handle(text):
     parts = text.split()
     cmd = parts[0].lower().split('@')[0]
-
+    
     if cmd in ('/start', '/help'):
         return HELP
-
+    
     tracker = StatsTracker()
     if not tracker.enabled:
         return "⚠️ Estadísticas no configuradas (Supabase)"
-
+    
     all_picks = tracker.get_all_picks()
-
+    
     if cmd == '/stats':
         return fmt_stats(compute_for(all_picks), "RENDIMIENTO ACUMULADO")
-
+    
     if cmd == '/week':
         return fmt_weekly(picks_settled_since(tracker, 7), compute_for(all_picks))
-
+    
     if cmd == '/today':
         today = datetime.now(timezone.utc).date().isoformat()
         todays = [p for p in all_picks if (p.get('timestamp') or '').startswith(today)]
@@ -145,7 +182,20 @@ def handle(text):
             ev = p['ev_percentage'] or 0
             L.append(f"{st_} {p['partido']}\n   {p['mercado']} @ {cuota:.2f} · EV {ev:+.1f}%")
         return "\n".join(L)
-
+    
+    if cmd == '/pending':
+        pend = [p for p in all_picks if p['status'] == 'pending']
+        if not pend:
+            return "✅ No hay picks pendientes de liquidar."
+        L = [f"⏳ <b>Pendientes de liquidar ({len(pend)})</b>", ""]
+        for p in pend[:15]:
+            cuota = p['cuota'] or 0
+            ev = p['ev_percentage'] or 0
+            L.append(f"⏳ {p['partido']}\n   {p['mercado']} @ {cuota:.2f} · EV {ev:+.1f}% · {p['hora']}")
+        if len(pend) > 15:
+            L.append(f"… y {len(pend) - 15} más")
+        return "\n".join(L)
+    
     if cmd == '/market':
         q = _norm(' '.join(parts[1:])) if len(parts) > 1 else ''
         if not q:
@@ -155,13 +205,10 @@ def handle(text):
         if not sel:
             return f"🤷 Sin picks para «{' '.join(parts[1:])}»"
         return fmt_stats(compute_for(sel), f"MERCADO: {' '.join(parts[1:]).upper()}")
-
+    
     return HELP
 
 
-# ==========================================
-# Arranque: webhook + botón Menú (thread separado, no bloqueante)
-# ==========================================
 def _startup():
     base = os.getenv('WEBHOOK_URL', '').strip()
     if not base:
@@ -169,7 +216,7 @@ def _startup():
         if ext:
             base = f"{ext}/telegram"
     if base and BOT_TOKEN:
-        r = tg('setWebhook', url=base)
+        r = tg('setWebhook', url=base, allowed_updates=["message", "message_reaction"])
         logger.info(f"🔗 Webhook: {base} → HTTP {r.status_code if r is not None else 'ERROR'}")
     if BOT_TOKEN:
         r = tg('setMyCommands', commands=COMMANDS)
