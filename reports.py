@@ -1,5 +1,5 @@
 """
-Informes de rendimiento para Telegram (v0.3).
+Informes de rendimiento para Telegram (v0.3 + v0.4-D CLV).
 Funciones compartidas por el bot de comandos y el resumen semanal.
 """
 from datetime import datetime, timedelta, timezone
@@ -17,6 +17,12 @@ def compute_for(picks):
     evs = [p['ev_percentage'] for p in settled if p['ev_percentage'] is not None]
     bs = [(p['prob_ia'] - (1 if p['status'] == 'won' else 0)) ** 2
           for p in settled if p['prob_ia'] is not None]
+
+    # CLV: no requiere liquidación, solo cuota tomada y de cierre
+    clvs = [((p['cuota'] / p['closing_odds']) - 1) * 100
+            for p in picks if p.get('closing_odds') and p.get('cuota')]
+    beat = sum(1 for c in clvs if c > 0)
+
     return {
         'total': len(picks),
         'settled': n,
@@ -28,6 +34,9 @@ def compute_for(picks):
         'hit': hit,
         'brier': (sum(bs) / len(bs)) if bs else None,
         'gap': ((sum(evs) / len(evs)) - yld) if evs else None,
+        'clv_n': len(clvs),
+        'avg_clv': (sum(clvs) / len(clvs)) if clvs else None,
+        'beat_close': (beat / len(clvs) * 100) if clvs else None,
     }
 
 
@@ -66,6 +75,9 @@ def fmt_stats(s, title):
             L.append(f"⚖️ Calibración IA−real: {s['gap']:+.1f} pp")
     else:
         L.append("⏳ Aún sin picks liquidados.")
+    if s.get('avg_clv') is not None:
+        L.append(f"🔻 CLV medio: <b>{s['avg_clv']:+.1f}%</b> ({s['clv_n']} picks) "
+                 f"· bate al cierre: <b>{s['beat_close']:.0f}%</b>")
     return "\n".join(L)
 
 
@@ -86,6 +98,10 @@ def fmt_weekly(week_picks, all_stats):
             wm = min(agg, key=agg.get)
             L.append(f"🏆 Mejor mercado: <b>{bm}</b> ({agg[bm]:+.2f} u)")
             L.append(f"📉 Peor mercado: <b>{wm}</b> ({agg[wm]:+.2f} u)")
+        if s.get('avg_clv') is not None:
+            L.append(f"🔻 CLV semana: <b>{s['avg_clv']:+.1f}%</b> · bate al cierre: {s['beat_close']:.0f}%")
     L.append("")
     L.append(f"💼 Acumulado: PnL <b>{all_stats['pnl']:+.2f} u</b> · Yield <b>{all_stats['yield_pct']:+.1f}%</b>")
+    if all_stats.get('avg_clv') is not None:
+        L.append(f"🔻 CLV acumulado: <b>{all_stats['avg_clv']:+.1f}%</b>")
     return "\n".join(L)
