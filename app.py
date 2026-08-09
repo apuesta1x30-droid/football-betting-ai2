@@ -10,10 +10,12 @@ from scipy.stats import poisson
 import os
 warnings.filterwarnings('ignore')
 
+from stats_tracker import StatsTracker
+
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
 
 # ==========================================
-# CONFIGURACIÓN - LEER DESDE SECRETS DE STREAMLIT
+# CONFIGURACIÓN
 # ==========================================
 THE_ODDS_API_KEY = st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", ""))
 API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", "00599a23daf70c08d47f1db56dfe5eb5"))
@@ -52,16 +54,14 @@ def scan_all_markets():
     url = f"https://api.the-odds-api.com/v4/sports/soccer/odds"
     params = {
         "regions": "eu,us",
-        "markets": "h2h,totals", # BTTS se obtiene vía API-Football
+        "markets": "h2h,totals",
         "oddsFormat": "decimal",
         "apiKey": THE_ODDS_API_KEY
     }
-    
     response = requests.get(url, params=params, timeout=15)
     if response.status_code != 200:
         st.error(f"Error en The Odds API: {response.text}")
         return []
-    
     return response.json()
 
 def get_fixture_id_from_api_football(home_team, away_team, match_date):
@@ -95,7 +95,6 @@ def get_api_football_odds(fixture_id):
         data = response.json().get("response", [])
         if not data:
             return {}
-        
         odds_data = {}
         for item in data:
             for bookmaker in item.get("bookmakers", []):
@@ -171,7 +170,6 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
         else:
             match_time = datetime.fromisoformat(commence_time)
         
-        # Convertir a hora de España
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
         
         if only_today:
@@ -206,7 +204,7 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
         
         probs_1x2 = models['1x2'].predict_proba(features)[0]
         prob_over25 = models['over25'].predict_proba(features)[0][1]
-        prob_btts = models['btts'].predict_proba(features)[0][1] # ✅ BTTS
+        prob_btts = models['btts'].predict_proba(features)[0][1]
         dc_probs = calculate_double_chance_probs(models, features)
         prob_over05_ht = calculate_over05_ht_prob(prob_over25)
         
@@ -242,7 +240,6 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
                         if key not in best_odds or odd > best_odds[key]:
                             best_odds[key] = odd
         
-        # Doble Oportunidad (API-Football)
         dc_1X_api = api_football_odds.get('12_1X')
         dc_X2_api = api_football_odds.get('12_X2')
         dc_12_api = api_football_odds.get('12_12')
@@ -268,7 +265,6 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             best_odds['DC_12_CALC'] = 1/dc_probs['12']
             stats['calculated'] += 1
         
-        # Over 0.5 Primera Parte (API-Football)
         over05_ht_api = None
         for api_key, odd in api_football_odds.items():
             if api_key.startswith('6_Over') and '0.5' in api_key:
@@ -282,7 +278,6 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             best_odds['HT_Over_0.5_CALC'] = 1/prob_over05_ht
             stats['calculated'] += 1
 
-        # ✅ BTTS (API-Football, market ID 8)
         btts_yes_api = api_football_odds.get('8_Yes')
         btts_no_api = api_football_odds.get('8_No')
         
@@ -300,7 +295,6 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             best_odds['BTTS_No_CALC'] = 1/(1-prob_btts)
             stats['calculated'] += 1
         
-        # Calcular EV
         for market_key, odd in best_odds.items():
             prob = None
             mercado_name = None
@@ -356,7 +350,7 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
                 value_bets.append({
                     "Liga": league,
                     "Partido": f"{home_team} vs {away_team}",
-                    "Hora": match_time_es.strftime('%d/%m %H:%M'), # ✅ Hora España
+                    "Hora": match_time_es.strftime('%d/%m %H:%M'),
                     "Mercado": mercado_name,
                     "Cuota": odd,
                     "Prob. IA": prob,
@@ -397,11 +391,6 @@ with st.expander("❓ ¿Qué es el Expected Value (EV)? - Guía completa", expan
     
     ### 💡 Ejemplo: Cuota 2.75 con Prob. IA 53.2%
     EV = (0.532 × 2.75) - 1 = **+46.3%**
-    
-    ### ⚠️ Importante:
-    - Un EV positivo NO garantiza ganar cada apuesta
-    - El valor está en la repetición a largo plazo
-    - Nunca arriesgues más del 5% por apuesta
     """)
 
 st.sidebar.header("⚙️ Configuración")
@@ -415,7 +404,7 @@ max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0,
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Filtro de Fecha")
-only_today = st.sidebar.checkbox("Solo partidos de HOY", value=True, help="Si desmarcas, verás partidos de los próximos 3 días")
+only_today = st.sidebar.checkbox("Solo partidos de HOY", value=True)
 
 team_db_preview = load_team_database()
 st.sidebar.markdown("---")
@@ -424,7 +413,7 @@ st.sidebar.info(f"📁 Equipos en base de datos: **{len(team_db_preview)}**")
 st.sidebar.markdown("### 🎯 Mercados Activos:")
 st.sidebar.markdown("- ✅ Over 1.5, 2.5, 3.5 Goles")
 st.sidebar.markdown("- ✅ 1X2 (Ganador)")
-st.sidebar.markdown("- ✅ BTTS (Ambos marcan)") # ✅ Añadido
+st.sidebar.markdown("- ✅ BTTS (Ambos marcan)")
 st.sidebar.markdown("- ✅ Doble Oportunidad (1X, X2, 12)")
 st.sidebar.markdown("- ✅ Over 0.5 1ª Parte")
 
@@ -443,10 +432,20 @@ if st.button("🔄 Escanear Todos los Mercados Ahora"):
         fixtures = scan_all_markets()
         if fixtures:
             df_bets, stats = analyze_multi_market(models, fixtures, team_db, min_odd=min_odd, max_odd=max_odd, only_today=only_today)
+            
+            # ✅ REGISTRAR TODOS LOS PICKS EN BD
+            tracker_register = StatsTracker()
+            registered = 0
+            if not df_bets.empty:
+                for _, row in df_bets.iterrows():
+                    if tracker_register.register_pick(row.to_dict()):
+                        registered += 1
+            
             st.session_state['df_bets'] = df_bets
             st.session_state['stats'] = stats
             st.session_state['total_fixtures'] = len(fixtures)
-            st.success(f"✅ Escaneo completado")
+            st.session_state['registered_picks'] = registered
+            st.success(f"✅ Escaneo completado | 💾 {registered} picks registrados")
         else:
             st.error("No se pudieron obtener datos de la API")
 
@@ -461,7 +460,7 @@ if 'df_bets' in st.session_state:
     col_f1, col_f2, col_f3, col_f4 = st.columns(4)
     
     with col_f1:
-        selected_market = st.selectbox(" Filtrar por Mercado:", options=["Todos"] + sorted(df_filtered["Mercado"].unique().tolist()) if not df_filtered.empty else ["Todos"])
+        selected_market = st.selectbox("Filtrar por Mercado:", options=["Todos"] + sorted(df_filtered["Mercado"].unique().tolist()) if not df_filtered.empty else ["Todos"])
     with col_f2:
         selected_league = st.selectbox("🏆 Filtrar por Liga:", options=["Todas"] + sorted(df_filtered["Liga"].unique().tolist()) if not df_filtered.empty else ["Todas"])
     with col_f3:
@@ -555,8 +554,62 @@ if 'df_bets' in st.session_state:
             st.info(f"Mostrando las 50 mejores de {len(df_filtered)} Value Bets.")
     else:
         st.info("No hay resultados para mostrar con los filtros actuales.")
+
+# ==========================================
+# ✅ NUEVA SECCIÓN: ESTADÍSTICAS HISTÓRICAS
+# ==========================================
+st.markdown("---")
+st.subheader("📈 Estadísticas Históricas")
+st.caption("Rendimiento acumulado de todos los picks registrados por el bot")
+
+tracker = StatsTracker()
+hist_stats = tracker.calculate_stats()
+
+if hist_stats['settled'] > 0:
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total Picks", hist_stats['total'])
+    col2.metric("Liquidados", hist_stats['settled'])
+    col3.metric("Pendientes", hist_stats['pending'])
+    col4.metric("✅ Aciertos", hist_stats['wins'])
+    col5.metric("❌ Errores", hist_stats['losses'])
+    
+    col6, col7, col8, col9 = st.columns(4)
+    col6.metric("📊 Hit Rate", f"{hist_stats['hit_rate']:.1f}%")
+    col7.metric("💰 PnL", f"{hist_stats['pnl']:+.2f} u")
+    col8.metric("📈 Yield", f"{hist_stats['yield']:+.1f}%")
+    if hist_stats['avg_ev_declared'] is not None:
+        col9.metric("📉 EV medio (declarado)", f"{hist_stats['avg_ev_declared']:+.1f}%")
+    else:
+        col9.metric("📉 EV medio", "N/A")
+    
+    if hist_stats['calibration_gap'] is not None:
+        gap = hist_stats['calibration_gap']
+        if gap > 5:
+            st.warning(f"⚠️ El modelo SOBREESTIMA el valor en **{gap:+.1f} pp**. Los picks prometen más de lo que entregan.")
+        elif gap < -5:
+            st.success(f"✅ El modelo es CONSERVADOR en **{abs(gap):.1f} pp}. Mejor de lo esperado.")
+        else:
+            st.info(f"✅ Calibración correcta (gap: {gap:+.1f} pp)")
+    
+    st.markdown("#### 📊 Rendimiento por Mercado")
+    market_stats = tracker.get_stats_by_market()
+    if market_stats:
+        df_markets = pd.DataFrame(market_stats).T
+        df_markets = df_markets.sort_values('Total', ascending=False)
+        st.dataframe(df_markets, use_container_width=True)
+    
+    st.markdown("#### 🏆 Rendimiento por Liga")
+    league_stats = tracker.get_stats_by_league()
+    if league_stats:
+        df_leagues = pd.DataFrame(league_stats).T
+        df_leagues = df_leagues.sort_values('Total', ascending=False).head(15)
+        st.dataframe(df_leagues, use_container_width=True)
+
+elif hist_stats['total'] > 0:
+    st.info(f"📊 Hay **{hist_stats['total']} picks registrados** pero ninguno liquidado aún.")
+    st.info("💡 Los picks se liquidarán cuando se implemente la v0.2 (liquidación automática con API-Football) o manualmente.")
 else:
-    st.info("Haz clic en '🔄 Escanear Todos los Mercados Ahora' para comenzar.")
+    st.info("📊 Aún no hay picks registrados. Los picks se guardarán a partir del próximo escaneo.")
 
 st.markdown("---")
 st.markdown("""
