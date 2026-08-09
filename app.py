@@ -19,7 +19,7 @@ st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wid
 # CONFIGURACIÓN
 # ==========================================
 THE_ODDS_API_KEY = st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", ""))
-API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", "00599a23daf70c08d47f1db56dfe5eb5"))
+API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", ""))
 API_FOOTBALL_HEADERS = {'x-rapidapi-key': API_FOOTBALL_KEY, 'x-rapidapi-host': "v3.football.api-sports.io"}
 
 # ==========================================
