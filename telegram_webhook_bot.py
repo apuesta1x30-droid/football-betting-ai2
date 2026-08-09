@@ -63,6 +63,7 @@ def telegram():
     text = (message.get('text') or '').strip()
 
     # Solo tu chat y solo comandos
+    logger.info(f"📨 Recibido: chat_id={chat_id}, text={text}, CHAT_ID={CHAT_ID}")
     if chat_id != CHAT_ID or not text.startswith('/'):
         return jsonify(ok=True)
 
