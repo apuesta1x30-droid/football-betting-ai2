@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-v0.3-A · Bot de comandos de Telegram por WEBHOOK (microservicio Render).
-Comandos: /stats /week /today /market <texto> /help
+v0.3-A + afinado · Bot de comandos de Telegram por WEBHOOK (microservicio Render).
+Comandos: /stats /week /today /market /scan /app /help
 Solo responde al chat TELEGRAM_CHAT_ID (seguridad).
-El webhook se registra solo al arrancar (usa RENDER_EXTERNAL_URL).
+Al arrancar registra el webhook y el botón Menú (setMyCommands).
 """
 import os
 import logging
@@ -21,8 +21,20 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 CHAT_ID = str(os.getenv('TELEGRAM_CHAT_ID', ''))
+APP_URL = "https://football-betting-ai2-xay2ankt3xzaecxpbu6nwf.streamlit.app/"
 
 app = Flask(__name__)
+
+# Botón "Menú" de Telegram (setMyCommands)
+COMMANDS = [
+    {"command": "stats", "description": "📊 Rendimiento acumulado"},
+    {"command": "week", "description": "🗓️ Resumen últimos 7 días"},
+    {"command": "today", "description": "📅 Picks de hoy"},
+    {"command": "market", "description": "🎯 Rendimiento por mercado"},
+    {"command": "scan", "description": "🔄 Lanzar escaneo ahora"},
+    {"command": "app", "description": "🌐 Abrir dashboard"},
+    {"command": "help", "description": "❓ Menú de comandos"},
+]
 
 HELP = """
 🤖 <b>Comandos disponibles</b>
@@ -32,6 +44,8 @@ HELP = """
 /today → picks registrados hoy
 /market BTTS → rendimiento de un mercado
 /market → lista de mercados con datos
+/scan → lanzar un escaneo manual ahora
+/app → abrir el dashboard
 /help → este menú
 """.strip()
 
@@ -51,6 +65,15 @@ def tg(method, **data):
         return None
 
 
+def _run_scan_async():
+    """Escaneo manual en segundo plano (envía sus propios mensajes)."""
+    try:
+        from auto_scan import scan_value_bets
+        scan_value_bets()
+    except Exception as e:
+        logger.error(f"❌ Error en escaneo manual: {e}")
+
+
 @app.route('/')
 def health():
     return jsonify(ok=True, service="valuebets-bot")
@@ -65,8 +88,24 @@ def telegram():
 
     logger.info(f"📨 Recibido: chat_id={chat_id}, text={text}, CHAT_ID={CHAT_ID}")
 
-    # Solo tu chat y solo comandos
     if chat_id != CHAT_ID or not text.startswith('/'):
+        return jsonify(ok=True)
+
+    cmd = text.split()[0].lower().split('@')[0]
+
+    # /app → botón inline con el dashboard
+    if cmd == '/app':
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="🌐 <b>Dashboard Value Bet Scanner</b>", parse_mode='HTML',
+           reply_markup={"inline_keyboard": [[{"text": "🌐 Abrir scanner", "url": APP_URL}]]})
+        return jsonify(ok=True)
+
+    # /scan → escaneo manual en segundo plano
+    if cmd == '/scan':
+        threading.Thread(target=_run_scan_async, daemon=True).start()
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
+           parse_mode='HTML')
         return jsonify(ok=True)
 
     reply = handle(text)
@@ -121,9 +160,9 @@ def handle(text):
 
 
 # ==========================================
-# Registro del webhook en thread separado (no bloqueante)
+# Arranque: webhook + botón Menú (thread separado, no bloqueante)
 # ==========================================
-def _register_webhook():
+def _startup():
     base = os.getenv('WEBHOOK_URL', '').strip()
     if not base:
         ext = os.getenv('RENDER_EXTERNAL_URL', '').strip().rstrip('/')
@@ -132,7 +171,9 @@ def _register_webhook():
     if base and BOT_TOKEN:
         r = tg('setWebhook', url=base)
         logger.info(f"🔗 Webhook: {base} → HTTP {r.status_code if r is not None else 'ERROR'}")
+    if BOT_TOKEN:
+        r = tg('setMyCommands', commands=COMMANDS)
+        logger.info(f"📋 Botón Menú registrado → HTTP {r.status_code if r is not None else 'ERROR'}")
 
 
-# Registrar webhook en thread separado para no bloquear el arranque
-threading.Thread(target=_register_webhook, daemon=True).start()
+threading.Thread(target=_startup, daemon=True).start()
