@@ -461,9 +461,18 @@ def scan_value_bets():
             [vb for vb in value_bets if vb['EV (%)'] >= EV_THRESHOLD_NOTIFY],
             key=lambda x: -x['EV (%)']
         )[:10]
-        for vb in top10:
-            send_telegram_message(format_value_bet_alert(vb))
-            time.sleep(0.5)
+        if top10:
+            for vb in top10:
+                send_telegram_message(format_value_bet_alert(vb))
+                time.sleep(0.5)
+        else:
+            # Hay value bets en BD, pero ninguna supera el umbral de notificación
+            send_telegram_message(
+                f"⚠️ <b>Sin apuestas de valor alto</b>\n\n"
+                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV 2-10%), "
+                f"pero ninguna supera el umbral de notificación (EV ≥ {EV_THRESHOLD_NOTIFY:.0f}%).\n\n"
+                f"💡 Mercado eficiente en las próximas horas."
+            )
     else:
         send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
 
