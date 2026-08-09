@@ -2,7 +2,7 @@ name: Weekly Report
 
 on:
   schedule:
-    - cron: '0 22 * * 0'   # domingos 22:00 UTC
+    - cron: '0 20 * * 0'   # domingos 20:00 UTC = 22:00 España (verano)
   workflow_dispatch:
 
 jobs:
