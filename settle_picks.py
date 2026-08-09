@@ -66,7 +66,7 @@ def pick_match_dt(p):
     """Fecha/hora del partido (Madrid) a partir de 'hora' + año del timestamp."""
     try:
         year = int(p['timestamp'][:4])
-        return datetime.strptime(f"{p['hora']} {year}", '%d/%m %H:%M %Y')
+        return datetime.strptime(f"{p['hora']} {year}", '%d/%m %H:%M %Y').replace(tzinfo=ZoneInfo("Europe/Madrid"))
     except Exception:
         return None
 
