@@ -454,10 +454,14 @@ def scan_value_bets():
     
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets))
-        for vb in value_bets:
-            if vb['EV (%)'] >= EV_THRESHOLD_NOTIFY:
-                send_telegram_message(format_value_bet_alert(vb))
-                time.sleep(0.5)
+        # Máximo 10 alertas por escaneo: las de mayor EV
+        top10 = sorted(
+            [vb for vb in value_bets if vb['EV (%)'] >= EV_THRESHOLD_NOTIFY],
+            key=lambda x: -x['EV (%)']
+        )[:10]
+        for vb in top10:
+            send_telegram_message(format_value_bet_alert(vb))
+            time.sleep(0.5)
     else:
         send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
 
