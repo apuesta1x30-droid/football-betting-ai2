@@ -66,6 +66,7 @@ class StatsTracker:
                 "prob_casa": self._f(pick.get('Prob. Casa')),
                 "ev_percentage": self._f(pick.get('EV (%)')),
                 "fuente": pick.get('Fuente'),
+                "telegram_message_id": pick.get('Telegram Msg ID'),
                 "raw_hash": self._hash_pick(pick),
             }
             self.client.table(self.table).upsert(
