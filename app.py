@@ -615,6 +615,27 @@ st.markdown("---")
 st.subheader("📉 Gráficos de Evolución")
 st.caption("Evolución temporal del rendimiento REAL (picks liquidados)")
 
+with st.expander("❓ Cómo leer estos gráficos - Guía rápida", expanded=False):
+    st.markdown("""
+    ### 💰 PnL acumulado (unidades, stake=1)
+    - Cada punto es un pick liquidado, en orden de liquidación.
+    - **Línea verde subiendo** = beneficio sostenido; **bajando** = racha negativa.
+    - La **línea gris discontinua en 0** es el punto de equilibrio: por encima ganas, por debajo pierdes.
+    - La **pendiente** de la curva es tu yield real en el tiempo.
+
+    ### 🎯 Hit rate rodante (ventana de 10 picks)
+    - Muestra el % de aciertos de **los últimos 10 picks** en cada punto.
+    - La **línea verde punteada** es tu hit rate global (media de todos los liquidados).
+    - Picos y valles son rachas cortas: un valle puntual no es grave si la línea global se mantiene.
+
+    ### ⚖️ Calibración: prometido vs real
+    - **Naranja** = Prob. IA media prometida hasta ese momento.
+    - **Verde** = % de aciertos real hasta ese momento.
+    - Si la naranja se separa **por encima** de la verde: la IA promete más de lo que cumple → exige más EV o baja stakes.
+    - Si van **pegadas** (±10 pp): sistema bien calibrado, confía en los EV declarados.
+    - Si la verde va **por encima**: la IA es conservadora; el sistema rinde más de lo que anuncia.
+    """)
+
 picks_hist = tracker.get_all_picks()
 settled_hist = sorted(
     [p for p in picks_hist if p['status'] in ('won', 'lost')],
