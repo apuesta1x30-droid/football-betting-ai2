@@ -139,7 +139,13 @@ def run(test=False):
                 params={"apiKey": THE_ODDS_API_KEY, "regions": "eu,us",
                         "markets": "h2h,totals,totals_h1", "oddsFormat": "decimal"},
                 timeout=15)
+            if r.status_code != 200:
+                logger.error(f"❌ The Odds API ({liga}): HTTP {r.status_code} · {r.text[:200]}")
+                continue
             events = r.json()
+            if not isinstance(events, list):
+                logger.error(f"❌ Respuesta inesperada ({liga}): {str(events)[:200]}")
+                continue
         except Exception as e:
             logger.error(f"Error consultando odds de {liga}: {e}")
             continue
