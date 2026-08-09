@@ -9,6 +9,7 @@ import os
 import logging
 import requests
 import unicodedata
+import threading
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 
@@ -62,8 +63,9 @@ def telegram():
     chat_id = str((message.get('chat') or {}).get('id', ''))
     text = (message.get('text') or '').strip()
 
-    # Solo tu chat y solo comandos
     logger.info(f"📨 Recibido: chat_id={chat_id}, text={text}, CHAT_ID={CHAT_ID}")
+
+    # Solo tu chat y solo comandos
     if chat_id != CHAT_ID or not text.startswith('/'):
         return jsonify(ok=True)
 
@@ -119,7 +121,7 @@ def handle(text):
 
 
 # ==========================================
-# Registro del webhook al arrancar el servicio
+# Registro del webhook en thread separado (no bloqueante)
 # ==========================================
 def _register_webhook():
     base = os.getenv('WEBHOOK_URL', '').strip()
@@ -129,7 +131,8 @@ def _register_webhook():
             base = f"{ext}/telegram"
     if base and BOT_TOKEN:
         r = tg('setWebhook', url=base)
-        logger.info(f" Webhook: {base} → HTTP {r.status_code if r is not None else 'ERROR'}")
+        logger.info(f"🔗 Webhook: {base} → HTTP {r.status_code if r is not None else 'ERROR'}")
 
 
-_register_webhook()
+# Registrar webhook en thread separado para no bloquear el arranque
+threading.Thread(target=_register_webhook, daemon=True).start()
