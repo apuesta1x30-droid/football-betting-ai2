@@ -294,8 +294,10 @@ def scan_value_bets():
             match_time = datetime.fromisoformat(commence_time)
         
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
+        now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
         
-        if match_time.date() != now.date():
+        # Solo partidos que aún no han empezado (filtrado por hora, no solo por fecha)
+        if match_time_es <= now_es:
             continue
         
         stats['total'] += 1
