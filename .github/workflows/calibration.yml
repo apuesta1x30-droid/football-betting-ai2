@@ -1,0 +1,39 @@
+name: Calibration Alert
+
+on:
+  schedule:
+    - cron: '45 13 * * *'   # diario a las 13:45 UTC, tras el settle de las 13:15
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'Enviar mensaje de prueba sin umbrales'
+        type: boolean
+        default: false
+
+jobs:
+  calibration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Check calibration
+      env:
+        SUPABASE_URL_FB: ${{ secrets.SUPABASE_URL_FB }}
+        SUPABASE_KEY_FB: ${{ secrets.SUPABASE_KEY_FB }}
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python calibration_alert.py ${{ github.event.inputs.test == 'true' && '--test' || '' }}
