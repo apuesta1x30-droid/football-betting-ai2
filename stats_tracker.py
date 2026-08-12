@@ -107,6 +107,22 @@ class StatsTracker:
     # ==========================================
     # LECTURA
     # ==========================================
+    def hash_pick(self, pick):
+        """Hash público de un pick (misma fórmula que el interno)."""
+        return self._hash_pick(pick)
+
+    def get_registered_hashes(self):
+        """Set de raw_hash ya registrados (para no re-alertar en scans posteriores)."""
+        if not self.client:
+            return set()
+        try:
+            resp = self.client.table(self.table).select('raw_hash').execute()
+            return {r['raw_hash'] for r in resp.data}
+        except Exception as e:
+            logger.error(f"Error leyendo hashes: {e}")
+            return set()
+
+    
     def get_all_picks(self) -> List[Dict]:
         if not self.client:
             return []
