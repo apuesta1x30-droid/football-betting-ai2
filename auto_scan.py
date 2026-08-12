@@ -456,7 +456,11 @@ def scan_value_bets():
             key=lambda x: -x['EV (%)']
         )[:10]
         if top10:
+            ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
+                if tracker.hash_pick(vb) in ya_registrados:
+                    logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
+                    continue
                 msg_id = send_telegram_message(format_value_bet_alert(vb))
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
