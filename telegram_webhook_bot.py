@@ -78,23 +78,35 @@ def _run_scan_async():
 
 
 def handle_reaction(reaction):
-    """👌 = won · 👎 = lost, sobre el pick asociado al mensaje reaccionado."""
+    """👌 = won · 👎 = lost, sobre el pick asociado al mensaje reaccionado.
+    Siempre confirma el resultado de la reacción para que sepas qué pasó."""
     msg_id = reaction.get('message_id')
     new = reaction.get('new_reaction') or []
     emojis = [r.get('emoji') for r in new if r.get('type') == 'emoji']
     status = 'won' if '👌' in emojis else ('lost' if '👎' in emojis else None)
     if not status or not msg_id:
-        return
+        return  # reacción distinta a 👌/👎 (p. ej. ⚽): no hacer nada
     
     tracker = StatsTracker()
     if not tracker.enabled:
         return
     resp = tracker.client.table(tracker.table).select('*').eq('telegram_message_id', msg_id).execute()
     if not resp.data:
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="⚠️ <b>Alerta sin identificador</b>\nEste mensaje es anterior al sistema de reacciones. "
+                "El cron lo liquidará con el resultado real de API-Football.",
+           parse_mode='HTML')
         return
+    
     pick = resp.data[0]
+    
     if pick['status'] != 'pending':
-        return  # ya liquidado por el cron: la reacción no pisa datos reales
+        emoji = {'won': '✅', 'lost': '❌', 'void': '➖'}.get(pick['status'], '❓')
+        tg('sendMessage', chat_id=CHAT_ID,
+           text=f"ℹ️ <b>Ya liquidado por resultado real</b>\n{pick['partido']} · {pick['mercado']} "
+                f"→ {emoji} {pick['status'].upper()}\n\nTu reacción no lo modifica: el dato real manda.",
+           parse_mode='HTML')
+        return
     
     tracker.settle_pick(pick['id'], status)
     emoji = '✅' if status == 'won' else '❌'
