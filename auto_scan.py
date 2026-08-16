@@ -1,53 +1,43 @@
+#!/usr/bin/env python3
+"""
+v0.5-A · Escaneo automático de value bets.
+- Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
+- Registra picks en Supabase con features del modelo y message_id de Telegram
+- Filtra por hora actual (solo partidos futuros)
+- Deduplica picks ya registrados (no re-alerta en scans posteriores)
+- Mensaje cuando no hay apuestas de valor alto
+"""
 import os
 import sys
 import time
-import pandas as pd
-import numpy as np
+import logging
 import requests
 import joblib
-import logging
-from datetime import datetime, timezone
+import pandas as pd
+import numpy as np
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
-import warnings
-warnings.filterwarnings('ignore')
 
 from stats_tracker import StatsTracker
 
-# ==========================================
-# CONFIGURACIÓN Y LOGGING
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Variables de entorno (desde GitHub Secrets)
 THE_ODDS_API_KEY = os.getenv('THE_ODDS_API_KEY', '')
-API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-# Parámetros del escaneo
-MIN_ODD = 1.3
-MAX_ODD = 3.0
-EV_THRESHOLD_NOTIFY = 10.0
-EV_THRESHOLD_MIN = 2.0
+EV_THRESHOLD_MIN = 2.0  # Umbral mínimo para registrar en BD
+EV_THRESHOLD_NOTIFY = 10.0  # Umbral mínimo para notificar por Telegram
+MIN_EV_TO_BET = 5.0  # EV mínimo recomendado para apostar
 
-API_FOOTBALL_HEADERS = {
-    'x-rapidapi-key': API_FOOTBALL_KEY,
-    'x-rapidapi-host': "v3.football.api-sports.io"
-}
 
-# ==========================================
-# FUNCIONES DE TELEGRAM
-# ==========================================
 def send_telegram_message(message, parse_mode="HTML"):
+    """Envía mensaje a Telegram y devuelve el message_id (o None si falla)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("⚠️ Telegram no configurado")
-        return False
+        logger.warning("Telegram no configurado")
+        return None
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {
@@ -69,104 +59,74 @@ def send_telegram_message(message, parse_mode="HTML"):
         logger.error(f"❌ Error enviando Telegram: {e}")
         return None
 
+
 def format_value_bet_alert(vb):
-    if vb['EV (%)'] >= 20:
-        emoji, level = "🚀", "EXCEPCIONAL"
-    elif vb['EV (%)'] >= 10:
-        emoji, level = "", "ALTO"
-    else:
-        emoji, level = "🟡", "MODERADO"
-    
-    prob = vb['Prob. IA']
-    cuota = vb['Cuota']
-    
-    b = cuota - 1
-    p = prob
-    q = 1 - prob
-    kelly_completo = (b * p - q) / b
-    kelly_fraccionado = kelly_completo / 4
-    kelly_final = max(1.0, min(10.0, kelly_fraccionado * 100))
-    
-    if kelly_completo > 0:
-        kelly_text = f"💰 <b>Stake recomendado:</b> {kelly_final:.1f}% de tu banca (Kelly 1/4)"
-    else:
-        kelly_text = "⚠️ <b>EV negativo:</b> No apostar"
-    
-    partido = vb['Partido']
-    partido_url = partido.replace(' ', '+')
-    enlace_flash = f"https://www.google.com/search?q={partido_url}+site:flashscore.com"
-    enlace_sofa = f"https://www.google.com/search?q={partido_url}+site:sofascore.com"
-    enlaces_html = f' <a href="{enlace_flash}">Flashscore</a> | <a href="{enlace_sofa}">Sofascore</a>'
-    
-    return f"""
-{emoji} <b>VALUE BET {level}</b> {emoji}
+    """Formatea una value bet como mensaje de alerta para Telegram."""
+    stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'])
+    return (
+        f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
+        f"🏆 <b>{vb['Liga']}</b>\n"
+        f"⚽ {vb['Partido']}\n"
+        f"🕐 {vb['Hora']}\n\n"
+        f"📊 <b>{vb['Mercado']}</b>\n"
+        f"💰 Cuota: <b>{vb['Cuota']:.2f}</b>\n"
+        f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
+        f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
+        f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/4)\n\n"
+        f"🔖 Fuente: {vb['Fuente']}"
+    )
 
-🏆 <b>{vb['Liga']}</b>
-⚽ <b>{vb['Partido']}</b>
-⏰ {vb['Hora']}
-
-📊 <b>Mercado:</b> {vb['Mercado']}
-💰 <b>Cuota:</b> {vb['Cuota']:.2f}
-🤖 <b>Prob. IA:</b> {vb['Prob. IA']:.1%}
-📉 <b>Prob. Casa:</b> {vb['Prob. Casa']:.1%}
-
-💚 <b>EV: +{vb['EV (%)']:.1f}%</b>
-{kelly_text}
-{enlaces_html}
-🔖 Fuente: {vb.get('Fuente', 'N/A')}
-
-<i>Apuesta con responsabilidad. Gestiona tu banca. By MAM</i>
-""".strip()
 
 def format_summary_message(stats, value_bets):
-    now = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')
-    high_ev = len([vb for vb in value_bets if vb['EV (%)'] >= 10])
-    
-    return f"""
-📊 <b>RESUMEN DEL ESCANEO</b>
-📅 {now}
+    """Formatea el resumen del escaneo."""
+    return (
+        f"📊 <b>RESUMEN DEL ESCANEO</b>\n\n"
+        f"🔎 Partidos analizados: <b>{stats['total']}</b>\n"
+        f"✅ Value Bets detectadas: <b>{len(value_bets)}</b>\n\n"
+        f"📡 Datos de The Odds API\n"
+        f"🤖 Probabilidades: Modelo XGBoost"
+    )
 
-🔍 Partidos analizados: <b>{stats['total']}</b>
-✅ Value Bets encontradas: <b>{len(value_bets)}</b>
 
-🟢 Alto valor (EV ≥ 10%): <b>{high_ev}</b>
+def calculate_kelly_stake(prob, odd, fraction=4):
+    """Calcula stake usando Kelly fraccionado (1/fraction)."""
+    if prob <= 0 or odd <= 1:
+        return 0.0
+    kelly = (prob * odd - 1) / (odd - 1)
+    return max(0.0, kelly / fraction)
 
-📈 Mejor EV: <b>{max([vb['EV (%)'] for vb in value_bets], default=0):.1f}%</b>
-📊 EV Promedio: <b>{np.mean([vb['EV (%)'] for vb in value_bets]) if value_bets else 0:.1f}%</b>
-""".strip()
 
-# ==========================================
-# CARGA DE MODELOS Y DATOS
-# ==========================================
 def load_models():
+    """Carga los modelos XGBoost entrenados."""
     models = {}
-    model_files = {
-        'over15': 'model_over15.pkl',
-        'over25': 'model_over25.pkl',
-        'over35': 'model_over35.pkl',
-        'btts': 'model_btts.pkl',
-        '1x2': 'model_1x2.pkl'
-    }
-    for name, filename in model_files.items():
-        if os.path.exists(filename):
-            models[name] = joblib.load(filename)
-            logger.info(f"✅ Modelo cargado: {name}")
-        else:
-            logger.error(f"❌ Modelo no encontrado: {filename}")
-            return None
-    return models
+    try:
+        models['over15'] = joblib.load('model_over15.pkl')
+        models['over25'] = joblib.load('model_over25.pkl')
+        models['over35'] = joblib.load('model_over35.pkl')
+        models['btts'] = joblib.load('model_btts.pkl')
+        models['1x2'] = joblib.load('model_1x2.pkl')
+        logger.info("✅ Modelos cargados")
+        return models
+    except Exception as e:
+        logger.error(f"❌ Error cargando modelos: {e}")
+        return None
+
 
 def load_team_database():
-    if not os.path.exists('team_stats_db.csv'):
-        logger.error("❌ team_stats_db.csv no encontrado")
+    """Carga la base de datos de equipos."""
+    try:
+        df_teams = pd.read_csv('team_stats_db.csv')
+        team_db = df_teams.set_index('Team').to_dict('index')
+        logger.info(f"📁 {len(team_db)} equipos en la base de datos")
+        return team_db
+    except Exception as e:
+        logger.error(f"❌ Error cargando team_stats_db.csv: {e}")
         return {}
-    
-    df_teams = pd.read_csv('team_stats_db.csv')
-    team_db = df_teams.set_index('Team').to_dict('index')
-    logger.info(f"📁 {len(team_db)} equipos en la base de datos")
-    return team_db
+
 
 def get_team_stats(team_name, team_db):
+    """Obtiene estadísticas de un equipo (o defaults si no existe)."""
     default_stats = {
         'Last_Form_Pts': 7,
         'Last_Goals_Scored_Avg': 1.4,
@@ -182,8 +142,9 @@ def get_team_stats(team_name, team_db):
                 stats[key] = value
         return stats
     
+    team_lower = team_name.lower()
     for db_team, stats in team_db.items():
-        if db_team.lower() == team_name.lower():
+        if db_team.lower() == team_lower:
             for key, value in default_stats.items():
                 if key not in stats:
                     stats[key] = value
@@ -191,79 +152,43 @@ def get_team_stats(team_name, team_db):
     
     return default_stats.copy()
 
-# ==========================================
-# FUNCIONES AUXILIARES
-# ==========================================
-def get_fixture_id(home_team, away_team, match_date):
-    try:
-        response = requests.get(
-            "https://v3.football.api-sports.io/fixtures",
-            headers=API_FOOTBALL_HEADERS,
-            params={"date": match_date[:10], "timezone": "UTC"},
-            timeout=10
-        )
-        for fixture in response.json().get("response", []):
-            h = fixture["teams"]["home"]["name"]
-            a = fixture["teams"]["away"]["name"]
-            if home_team.lower() in h.lower() and away_team.lower() in a.lower():
-                return fixture["fixture"]["id"]
-    except Exception as e:
-        logger.debug(f"Error buscando fixture: {e}")
-    return None
 
-def get_api_football_odds(fixture_id):
-    if not fixture_id:
-        return {}
-    try:
-        response = requests.get(
-            "https://v3.football.api-sports.io/odds",
-            headers=API_FOOTBALL_HEADERS,
-            params={"fixture": fixture_id},
-            timeout=10
-        )
-        odds_data = {}
-        for item in response.json().get("response", []):
-            for bookmaker in item.get("bookmakers", []):
-                for bet in bookmaker.get("bets", []):
-                    for value in bet.get("values", []):
-                        if value["odd"]:
-                            key = f"{bet['id']}_{value['value']}"
-                            if key not in odds_data or float(value["odd"]) > float(odds_data[key]):
-                                odds_data[key] = float(value["odd"])
-        return odds_data
-    except Exception as e:
-        logger.debug(f"Error obteniendo odds: {e}")
-        return {}
-
-def calculate_dc_probs(probs_1x2):
+def calculate_double_chance_probs(models, features):
+    """Calcula probabilidades de doble oportunidad desde 1X2."""
+    probs_1x2 = models['1x2'].predict_proba(features)[0]
     return {
         '1X': probs_1x2[0] + probs_1x2[1],
         'X2': probs_1x2[2] + probs_1x2[1],
         '12': probs_1x2[0] + probs_1x2[2]
     }
 
-def calculate_ht_prob(prob_over25):
-    p1 = min(0.70 + prob_over25 * 0.3, 0.90)
-    p2 = 1 - poisson.pmf(0, 2.7 * 0.42)
-    return (p1 * 0.4) + (p2 * 0.6)
 
-# ==========================================
-# ESCANEO PRINCIPAL
-# ==========================================
+def calculate_over05_ht_prob(prob_over25):
+    """Calcula probabilidad de Over 0.5 goles en 1ª parte."""
+    base_prob = 0.70
+    correlation_factor = prob_over25 * 0.3
+    prob_method1 = min(base_prob + correlation_factor, 0.90)
+    expected_goals_ht = 2.7 * 0.42
+    prob_method2 = 1 - poisson.pmf(0, expected_goals_ht)
+    return (prob_method1 * 0.4) + (prob_method2 * 0.6)
+
+
 def scan_value_bets():
+    """Escanea mercados y detecta value bets."""
     logger.info("🚀 Iniciando escaneo automático...")
+    
     if not THE_ODDS_API_KEY:
         logger.error("❌ THE_ODDS_API_KEY no configurada")
-        return
+        return 1
     
     models = load_models()
     if not models:
-        logger.error("❌ No se pudieron cargar los modelos")
-        return
+        return 1
     
     team_db = load_team_database()
     
-    url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
+    # Obtener fixtures de The Odds API
+    url = f"https://api.the-odds-api.com/v4/sports/soccer/odds"
     params = {
         "regions": "eu,us",
         "markets": "h2h,totals",
@@ -274,21 +199,27 @@ def scan_value_bets():
     try:
         response = requests.get(url, params=params, timeout=15)
         if response.status_code != 200:
-            logger.error(f"❌ Error API: {response.text}")
-            return
-        fixtures = response.json()
-        logger.info(f"📡 {len(fixtures)} partidos obtenidos")
+            logger.error(f"❌ Error The Odds API: {response.text}")
+            return 1
+        fixtures_data = response.json()
     except Exception as e:
-        logger.error(f"Error API: {e}")
-        return
+        logger.error(f"❌ Error consultando The Odds API: {e}")
+        return 1
     
+    logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
+    
+    # Analizar cada partido
     value_bets = []
     now = datetime.now(timezone.utc)
-    stats = {'total': 0, 'api_football': 0, 'calculated': 0}
+    stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
     
-    for event in fixtures:
+    for event in fixtures_data:
+        league = event.get("sport_title", "Unknown")
+        home_team = event["home_team"]
+        away_team = event["away_team"]
         commence_time = event["commence_time"]
-        if 'Z' in commence_time:
+        
+        if commence_time.endswith('Z'):
             match_time = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
         else:
             match_time = datetime.fromisoformat(commence_time)
@@ -302,160 +233,139 @@ def scan_value_bets():
         
         stats['total'] += 1
         
-        league = event.get("sport_title", "Unknown")
-        home_team = event["home_team"]
-        away_team = event["away_team"]
-        
         home_stats = get_team_stats(home_team, team_db)
         away_stats = get_team_stats(away_team, team_db)
+        
+        form_diff = home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7)
+        goal_threat_diff = home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4)
+        combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2
+        combined_btts = (home_stats.get('Last_BTTS_Rate', 0.50) + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
         
         features = pd.DataFrame([{
             'Home_Form_Pts': home_stats.get('Last_Form_Pts', 7),
             'Away_Form_Pts': away_stats.get('Last_Form_Pts', 7),
-            'Form_Diff': home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7),
+            'Form_Diff': form_diff,
             'Home_Goals_Scored': home_stats.get('Last_Goals_Scored_Avg', 1.4),
             'Away_Goals_Conceded': away_stats.get('Last_Goals_Conceded_Avg', 1.4),
-            'Goal_Threat_Diff': home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4),
-            'Combined_Over25_Rate': (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2,
-            'Combined_BTTS_Rate': (home_stats.get('Last_BTTS_Rate', 0.50) + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
+            'Goal_Threat_Diff': goal_threat_diff,
+            'Combined_Over25_Rate': combined_o25,
+            'Combined_BTTS_Rate': combined_btts
         }])
         
         probs_1x2 = models['1x2'].predict_proba(features)[0]
         prob_over25 = models['over25'].predict_proba(features)[0][1]
         prob_btts = models['btts'].predict_proba(features)[0][1]
-        dc_probs = calculate_dc_probs(probs_1x2)
-        prob_ht = calculate_ht_prob(prob_over25)
+        dc_probs = calculate_double_chance_probs(models, features)
+        prob_over05_ht = calculate_over05_ht_prob(prob_over25)
         
-        fixture_id = get_fixture_id(home_team, away_team, commence_time)
-        api_odds = get_api_football_odds(fixture_id)
+        # Buscar mejor cuota para cada mercado
         best_odds = {}
         
         for bookmaker in event.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
-                mk = market["key"]
+                market_key = market["key"]
                 for outcome in market.get("outcomes", []):
                     odd = outcome["price"]
-                    if odd < MIN_ODD or odd > MAX_ODD:
+                    name = outcome["name"]
+                    point = outcome.get("point", 2.5)
+                    
+                    if odd < 1.3 or odd > 3.0:
                         continue
+                    
                     key = None
-                    if mk == "h2h":
-                        if outcome["name"] == home_team:
+                    if market_key == "h2h":
+                        if name == home_team:
                             key = f"1X2_{home_team}"
-                        elif outcome["name"] == "Draw":
+                        elif name == "Draw":
                             key = "1X2_Draw"
-                        elif outcome["name"] == away_team:
+                        elif name == away_team:
                             key = f"1X2_{away_team}"
-                    elif mk == "totals" and outcome["name"] == "Over" and outcome.get("point", 2.5) in [1.5, 2.5, 3.5]:
-                        key = f"Over_{outcome.get('point')}"
-                    elif mk == "btts":
-                        if outcome["name"] == "Yes":
-                            key = "BTTS_Yes"
-                        elif outcome["name"] == "No":
-                            key = "BTTS_No"
-                    if key and (key not in best_odds or odd > best_odds[key]):
-                        best_odds[key] = odd
+                    elif market_key == "totals" and name == "Over":
+                        if point in [1.5, 2.5, 3.5]:
+                            key = f"Over_{point}"
+                    
+                    if key is not None:
+                        if key not in best_odds or odd > best_odds[key]:
+                            best_odds[key] = odd
         
-        for dc_key, prob_key in [('1X', '1X'), ('X2', 'X2'), ('12', '12')]:
-            api_val = api_odds.get(f'12_{dc_key}')
-            calc_val = 1 / dc_probs[prob_key]
-            if api_val and MIN_ODD <= api_val <= MAX_ODD:
-                best_odds[f'DC_{dc_key}'] = api_val
-                stats['api_football'] += 1
-            elif MIN_ODD <= calc_val <= MAX_ODD:
-                best_odds[f'DC_{dc_key}_CALC'] = calc_val
-                stats['calculated'] += 1
-        
-        ht_api = next((v for k, v in api_odds.items() if '6_Over' in k and '0.5' in k), None)
-        ht_calc = 1 / prob_ht
-        if ht_api and MIN_ODD <= ht_api <= MAX_ODD:
-            best_odds['HT_Over_0.5'] = ht_api
-            stats['api_football'] += 1
-        elif MIN_ODD <= ht_calc <= MAX_ODD:
-            best_odds['HT_Over_0.5_CALC'] = ht_calc
-            stats['calculated'] += 1
-        
-        btts_yes_api = api_odds.get('8_Yes')
-        btts_no_api = api_odds.get('8_No')
-        
-        if btts_yes_api and MIN_ODD <= btts_yes_api <= MAX_ODD:
-            best_odds['BTTS_Yes'] = btts_yes_api
-            stats['api_football'] += 1
-        elif MIN_ODD <= (1/prob_btts) <= MAX_ODD:
-            best_odds['BTTS_Yes_CALC'] = 1/prob_btts
-            stats['calculated'] += 1
-        
-        if btts_no_api and MIN_ODD <= btts_no_api <= MAX_ODD:
-            best_odds['BTTS_No'] = btts_no_api
-            stats['api_football'] += 1
-        elif MIN_ODD <= (1/(1-prob_btts)) <= MAX_ODD:
-            best_odds['BTTS_No_CALC'] = 1/(1-prob_btts)
-            stats['calculated'] += 1
-        
-        for mk, odd in best_odds.items():
-            prob, name, is_calc = None, None, '_CALC' in mk
+        # Analizar cada mercado con cuota disponible
+        for market_key, odd in best_odds.items():
+            prob = None
+            mercado_name = None
+            is_calculated = '_CALC' in market_key
             
-            if mk.startswith("1X2_"):
-                tp = mk.split("_")[1]
-                if tp == home_team:
-                    prob, name = probs_1x2[0], f"1X2 - {home_team}"
-                elif tp == "Draw":
-                    prob, name = probs_1x2[1], "1X2 - Empate"
-                elif tp == away_team:
-                    prob, name = probs_1x2[2], f"1X2 - {away_team}"
-            elif mk.startswith("Over_"):
-                p = float(mk.split("_")[1])
-                if p == 1.5:
-                    prob, name = models['over15'].predict_proba(features)[0][1], "Over 1.5 Goles"
-                elif p == 2.5:
-                    prob, name = models['over25'].predict_proba(features)[0][1], "Over 2.5 Goles"
-                elif p == 3.5:
-                    prob, name = models['over35'].predict_proba(features)[0][1], "Over 3.5 Goles"
-            elif mk.startswith("BTTS_"):
-                btts_type = mk.split("_")[1]
+            if market_key.startswith("1X2_"):
+                team_part = market_key.split("_")[1]
+                if team_part == home_team:
+                    prob, mercado_name = probs_1x2[0], f"1X2 - {home_team}"
+                elif team_part == "Draw":
+                    prob, mercado_name = probs_1x2[1], "1X2 - Empate"
+                elif team_part == away_team:
+                    prob, mercado_name = probs_1x2[2], f"1X2 - {away_team}"
+            elif market_key.startswith("Over_"):
+                point = float(market_key.split("_")[1])
+                if point == 1.5:
+                    prob = models['over15'].predict_proba(features)[0][1]
+                    mercado_name = "Over 1.5 Goles"
+                elif point == 2.5:
+                    prob = models['over25'].predict_proba(features)[0][1]
+                    mercado_name = "Over 2.5 Goles"
+                elif point == 3.5:
+                    prob = models['over35'].predict_proba(features)[0][1]
+                    mercado_name = "Over 3.5 Goles"
+            elif market_key.startswith("DC_"):
+                dc_type = market_key.replace("DC_", "").replace("_CALC", "")
+                if dc_type == "1X":
+                    prob = dc_probs['1X']
+                    mercado_name = "Doble Oportunidad - 1X"
+                elif dc_type == "X2":
+                    prob = dc_probs['X2']
+                    mercado_name = "Doble Oportunidad - X2"
+                elif dc_type == "12":
+                    prob = dc_probs['12']
+                    mercado_name = "Doble Oportunidad - 12"
+            elif market_key.startswith("HT_Over_0.5"):
+                prob = prob_over05_ht
+                mercado_name = "Over 0.5 Goles 1ª Parte"
+            elif market_key.startswith("BTTS_"):
+                btts_type = market_key.split("_")[1]
                 if btts_type == "Yes":
-                    prob, name = prob_btts, "BTTS - Sí (Ambos marcan)"
+                    prob, mercado_name = prob_btts, "BTTS - Sí (Ambos marcan)"
                 elif btts_type == "No":
-                    prob, name = 1 - prob_btts, "BTTS - No"
-            elif mk.startswith("DC_"):
-                tp = mk.replace("DC_", "").replace("_CALC", "")
-                prob, name = dc_probs[tp], f"Doble Oportunidad - {tp}"
-            elif mk.startswith("HT_Over_0.5"):
-                prob, name = prob_ht, "Over 0.5 Goles 1ª Parte"
+                    prob, mercado_name = 1 - prob_btts, "BTTS - No"
             
-            if prob:
-                ev = (prob * odd) - 1
-                if ev * 100 > EV_THRESHOLD_MIN:
-                    value_bets.append({
-                        "Liga": league,
-                        "Partido": f"{home_team} vs {away_team}",
-                        "Hora": match_time_es.strftime('%d/%m %H:%M'),
-                        "Mercado": name,
-                        "Cuota": odd,
-                        "Prob. IA": prob,
-                        "Prob. Casa": 1/odd,
-                        "EV (%)": ev * 100,
-                        "Fuente": "Cálculo" if is_calculated else "API-Football",
-                        "Features": features.iloc[0].to_dict()
-                    })
-
-    if value_bets:
-        df = pd.DataFrame(value_bets).drop_duplicates()
-        value_bets = df.to_dict('records')
+            if prob is None:
+                continue
+            
+            ev = (prob * odd) - 1
+            ev_percentage = ev * 100
+            
+            if ev_percentage > EV_THRESHOLD_MIN:
+                value_bets.append({
+                    "Liga": league,
+                    "Partido": f"{home_team} vs {away_team}",
+                    "Hora": match_time_es.strftime('%d/%m %H:%M'),
+                    "Mercado": mercado_name,
+                    "Cuota": odd,
+                    "Prob. IA": prob,
+                    "Prob. Casa": 1/odd,
+                    "EV (%)": ev_percentage,
+                    "Fuente": "Cálculo" if is_calculated else "API-Football",
+                    "Features": features.iloc[0].to_dict()
+                })
     
-    logger.info(f"✅ {len(value_bets)} Value Bets encontradas")
-    
-    # ==========================================
-    # ✅ NUEVO: REGISTRAR TODOS LOS PICKS EN BD
-    # ==========================================
+    # Enviar resumen y alertas
     tracker = StatsTracker()
     
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets))
+        
         # Máximo 10 alertas por escaneo: las de mayor EV
         top10 = sorted(
             [vb for vb in value_bets if vb['EV (%)'] >= EV_THRESHOLD_NOTIFY],
             key=lambda x: -x['EV (%)']
         )[:10]
+        
         if top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
@@ -467,7 +377,6 @@ def scan_value_bets():
                     vb['Telegram Msg ID'] = msg_id
                 time.sleep(0.5)
         else:
-            # Hay value bets en BD, pero ninguna supera el umbral de notificación
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n\n"
                 f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV 2-10%), "
@@ -482,12 +391,10 @@ def scan_value_bets():
                 registered_count += 1
         logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
-        send_telegram_message(f"💤 <b>Escaneo completado - Sin Value Bets</b>\n\n {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M UTC')}\n🔍 Partidos: <b>{stats['total']}</b>\n\n<i>Cuotas eficientes hoy.</i>")
+        send_telegram_message("💤 <b>Escaneo completado</b>\n\nSin Value Bets detectadas en las próximas horas.")
+    
+    return 0
+
 
 if __name__ == "__main__":
-    try:
-        scan_value_bets()
-    except Exception as e:
-        logger.error(f"❌ Error fatal: {e}", exc_info=True)
-        send_telegram_message(f"❌ <b>Error en el escaneo</b>\n\n{str(e)}")
-        sys.exit(1)
+    sys.exit(scan_value_bets())
