@@ -434,7 +434,8 @@ def scan_value_bets():
                         "Prob. IA": prob,
                         "Prob. Casa": 1/odd,
                         "EV (%)": ev * 100,
-                        "Fuente": "Cálculo" if is_calc else "API-Football"
+                        "Fuente": "Cálculo" if is_calculated else "API-Football",
+                        "Features": features.iloc[0].to_dict()
                     })
 
     if value_bets:
