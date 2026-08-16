@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-v0.5-A · Escaneo automático de value bets.
+v0.5-B · Escaneo automático de value bets con auto-ajuste dinámico.
+- Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
 - Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
 - Registra picks en Supabase con features del modelo y message_id de Telegram
 - Filtra por hora actual (solo partidos futuros)
@@ -10,6 +11,7 @@ v0.5-A · Escaneo automático de value bets.
 import os
 import sys
 import time
+import json
 import logging
 import requests
 import joblib
@@ -28,9 +30,29 @@ THE_ODDS_API_KEY = os.getenv('THE_ODDS_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-EV_THRESHOLD_MIN = 2.0  # Umbral mínimo para registrar en BD
-EV_THRESHOLD_NOTIFY = 10.0  # Umbral mínimo para notificar por Telegram
-MIN_EV_TO_BET = 5.0  # EV mínimo recomendado para apostar
+EV_THRESHOLD_MIN = 2.0  # Umbral mínimo para registrar en BD (fijo)
+DEFAULT_EV_NOTIFY = 10.0  # Default si no hay auto-ajuste
+DEFAULT_KELLY = 4  # Default: Kelly 1/4
+META_KEY_AUTO_TUNE = 'auto_tune'
+
+
+def load_auto_tune_config(tracker):
+    """Lee la configuración dinámica guardada por auto_tune.py."""
+    cfg = {'ev_notify': DEFAULT_EV_NOTIFY, 'kelly': DEFAULT_KELLY, 'gap': None, 'n': None}
+    if not tracker or not tracker.enabled:
+        return cfg
+    try:
+        resp = tracker.client.table('meta').select('value').eq('key', META_KEY_AUTO_TUNE).execute()
+        if resp.data:
+            data = json.loads(resp.data[0]['value'])
+            saved = data.get('cfg', {})
+            cfg['ev_notify'] = float(saved.get('ev_notify', DEFAULT_EV_NOTIFY))
+            cfg['kelly'] = int(saved.get('kelly', DEFAULT_KELLY))
+            cfg['gap'] = data.get('gap')
+            cfg['n'] = data.get('n')
+    except Exception as e:
+        logger.debug(f"No se pudo leer auto_tune config: {e}")
+    return cfg
 
 
 def send_telegram_message(message, parse_mode="HTML"):
@@ -60,9 +82,9 @@ def send_telegram_message(message, parse_mode="HTML"):
         return None
 
 
-def format_value_bet_alert(vb):
+def format_value_bet_alert(vb, kelly_fraction):
     """Formatea una value bet como mensaje de alerta para Telegram."""
-    stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'])
+    stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'], fraction=kelly_fraction)
     return (
         f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
         f"🏆 <b>{vb['Liga']}</b>\n"
@@ -73,17 +95,22 @@ def format_value_bet_alert(vb):
         f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
         f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
         f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
-        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/4)\n\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction})\n\n"
         f"🔖 Fuente: {vb['Fuente']}"
     )
 
 
-def format_summary_message(stats, value_bets):
-    """Formatea el resumen del escaneo."""
+def format_summary_message(stats, value_bets, cfg):
+    """Formatea el resumen del escaneo con la configuración activa."""
+    config_line = f"🤖 Config activa: EV≥{cfg['ev_notify']:.0f}% · Kelly 1/{cfg['kelly']}"
+    if cfg['gap'] is not None:
+        config_line += f" (gap {cfg['gap']:+.1f} pp)"
+    
     return (
         f"📊 <b>RESUMEN DEL ESCANEO</b>\n\n"
         f"🔎 Partidos analizados: <b>{stats['total']}</b>\n"
         f"✅ Value Bets detectadas: <b>{len(value_bets)}</b>\n\n"
+        f"{config_line}\n\n"
         f"📡 Datos de The Odds API\n"
         f"🤖 Probabilidades: Modelo XGBoost"
     )
@@ -181,6 +208,14 @@ def scan_value_bets():
         logger.error("❌ THE_ODDS_API_KEY no configurada")
         return 1
     
+    # Cargar configuración dinámica (Capa A del auto-aprendizaje)
+    tracker = StatsTracker()
+    cfg = load_auto_tune_config(tracker)
+    ev_notify = cfg['ev_notify']
+    kelly_fraction = cfg['kelly']
+    logger.info(f"🤖 Auto-ajuste: EV≥{ev_notify:.0f}% · Kelly 1/{kelly_fraction} "
+                f"(gap={cfg['gap']}, n={cfg['n']})")
+    
     models = load_models()
     if not models:
         return 1
@@ -227,7 +262,7 @@ def scan_value_bets():
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
         now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
         
-        # Solo partidos que aún no han empezado (filtrado por hora, no solo por fecha)
+        # Solo partidos que aún no han empezado
         if match_time_es <= now_es:
             continue
         
@@ -355,14 +390,12 @@ def scan_value_bets():
                 })
     
     # Enviar resumen y alertas
-    tracker = StatsTracker()
-    
     if value_bets:
-        send_telegram_message(format_summary_message(stats, value_bets))
+        send_telegram_message(format_summary_message(stats, value_bets, cfg))
         
-        # Máximo 10 alertas por escaneo: las de mayor EV
+        # Top 10 con el umbral DINÁMICO (ev_notify)
         top10 = sorted(
-            [vb for vb in value_bets if vb['EV (%)'] >= EV_THRESHOLD_NOTIFY],
+            [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
             key=lambda x: -x['EV (%)']
         )[:10]
         
@@ -372,19 +405,20 @@ def scan_value_bets():
                 if tracker.hash_pick(vb) in ya_registrados:
                     logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
                     continue
-                msg_id = send_telegram_message(format_value_bet_alert(vb))
+                msg_id = send_telegram_message(format_value_bet_alert(vb, kelly_fraction))
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
                 time.sleep(0.5)
         else:
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n\n"
-                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV 2-10%), "
-                f"pero ninguna supera el umbral de notificación (EV ≥ {EV_THRESHOLD_NOTIFY:.0f}%).\n\n"
+                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV 2-{ev_notify:.0f}%), "
+                f"pero ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n\n"
+                f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
                 f"💡 Mercado eficiente en las próximas horas."
             )
         
-        # Registro en BD después del envío (para guardar el message_id de Telegram)
+        # Registro en BD después del envío
         registered_count = 0
         for vb in value_bets:
             if tracker.register_pick(vb):
