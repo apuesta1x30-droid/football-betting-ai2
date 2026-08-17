@@ -104,4 +104,6 @@ def fmt_weekly(week_picks, all_stats):
     L.append(f"💼 Acumulado: PnL <b>{all_stats['pnl']:+.2f} u</b> · Yield <b>{all_stats['yield_pct']:+.1f}%</b>")
     if all_stats.get('avg_clv') is not None:
         L.append(f"🔻 CLV acumulado: <b>{all_stats['avg_clv']:+.1f}%</b>")
+    L.append("")
+    L.append("💡 Usa /glosario para entender cada métrica.")
     return "\n".join(L)
