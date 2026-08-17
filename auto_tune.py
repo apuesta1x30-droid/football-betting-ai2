@@ -99,12 +99,21 @@ def main():
                 f"(gap {gap:+.1f} pp, n={s['settled']})")
 
     if changed:
+        # Interpretación del cambio para el usuario
+        if new_cfg['ev_notify'] > prev.get('ev_notify', 10):
+            lectura = "📈 IA más afinada: subo el listón de calidad y protejo banca"
+        elif new_cfg['ev_notify'] < prev.get('ev_notify', 10):
+            lectura = "📉 IA conservadora: bajo el listón para no perder oportunidades"
+        else:
+            lectura = "🔄 Ajuste de Kelly según calibración detectada"
+        
         msg = (f"🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>\n\n"
-               f"⚖️ Gap de calibración: <b>{gap:+.1f} pp</b> ({motivo})\n"
-               f"🎯 EV mínimo de notificación: {prev.get('ev_notify', 10):.0f}% → <b>{new_cfg['ev_notify']:.0f}%</b>\n"
+               f"⚖️ Gap: <b>{gap:+.1f} pp</b> ({motivo})\n"
+               f"🎯 EV mínimo: {prev.get('ev_notify', 10):.0f}% → <b>{new_cfg['ev_notify']:.0f}%</b>\n"
                f"💰 Kelly: 1/{prev.get('kelly', 4)} → <b>1/{new_cfg['kelly']}</b>\n"
-               f"📊 Muestra: {s['settled']} picks liquidados\n\n"
-               f"El próximo escaneo aplicará esta configuración.")
+               f"📊 Muestra: {s['settled']} liquidados\n\n"
+               f"<i>{lectura}</i>\n\n"
+               f"ℹ️ Más info: /glosario")
         send(msg)
         logger.info("📨 Aviso de auto-ajuste enviado")
     else:
