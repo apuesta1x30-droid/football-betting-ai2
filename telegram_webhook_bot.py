@@ -55,8 +55,8 @@ HELP = """
 👌 = acertada (WON) · 👎 = fallada (LOST)
 """.strip()
 
-GLOSARIO = """
-📚 <b>GLOSARIO DE MÉTRICAS</b>
+GLOSARIO_P1 = """
+📚 <b>GLOSARIO DE MÉTRICAS (1/2)</b>
 
 🔎 <b>Liquidados (✅/❌)</b>
 Picks ya cerrados. ✅ = acierto, ❌ = fallo.
@@ -76,6 +76,10 @@ PnL / apuestas = rentabilidad real.
 
 🏆/ <b>Mejor/peor mercado</b>
 Mercado con más/menos PnL del periodo. Útil para detectar sesgos con meses de datos.
+"""
+
+GLOSARIO_P2 = """
+📚 <b>GLOSARIO DE MÉTRICAS (2/2)</b>
 
 🔻 <b>CLV (Closing Line Value)</b>
 Tu cuota vs la cuota de cierre del mercado.
@@ -99,8 +103,7 @@ Error de las probabilidades de la IA.
 Prob. IA prometida − acierto real (en puntos porcentuales).
 ✅ Favorable: entre −5 y +5 pp.
 ⚠️ > +10: la IA se viene arriba · < −10: la IA es conservadora.
-""".strip()
-
+"""
 
 def _norm(s):
     s = unicodedata.normalize('NFKD', s or '')
@@ -219,7 +222,10 @@ def handle(text):
         return HELP
     
     if cmd == '/glosario':
-        return GLOSARIO
+        # Enviar primera parte
+        tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P1, parse_mode='HTML')
+        # Segunda parte como respuesta normal
+        return GLOSARIO_P2
     
     tracker = StatsTracker()
     if not tracker.enabled:
