@@ -55,56 +55,31 @@ HELP = """
 👌 = acertada (WON) · 👎 = fallada (LOST)
 """.strip()
 
-GLOSARIO_P1 = """
-📚 <b>GLOSARIO DE MÉTRICAS (1/2)</b>
+GLOSARIO = """📚 <b>GLOSARIO DE MÉTRICAS</b>
 
-🔎 <b>Liquidados (✅/❌)</b>
-Picks ya cerrados. ✅ = acierto, ❌ = fallo.
+🔎 <b>Liquidados (✅/❌)</b> · Picks cerrados. ✅ acierto, ❌ fallo.
 
-🎯 <b>Hit rate</b>
-% de aciertos. Solo no dice todo: con cuota 2.0 necesitas >50%; con cuota 1.5, >67%.
-✅ Favorable: por encima de 1/cuota media.
+🎯 <b>Hit rate</b> · % aciertos. Favorable: >1/cuota media. Con cuota 2.0 necesitas >50%; con 1.5 necesitas >67%.
 
-💰 <b>PnL (unidades)</b>
-Beneficio contando stake=1 por pick.
-✅ Favorable: > 0.
+💰 <b>PnL (u)</b> · Beneficio con stake=1. Favorable: >0.
 
-📈 <b>Yield</b>
-PnL / apuestas = rentabilidad real.
-✅ >0 sostenido · 🟢 >5% bueno · 🟢 >10% excelente (raro de sostener).
-⚠️ Valores >20% en pocas semanas suelen ser varianza: espera 100+ picks.
+📈 <b>Yield</b> · PnL/apuestas = rentabilidad real. >5% bueno, >10% excelente (raro de sostener). >20% en pocas semanas suele ser varianza.
 
-🏆/ <b>Mejor/peor mercado</b>
-Mercado con más/menos PnL del periodo. Útil para detectar sesgos con meses de datos.
+🏆 <b>Mejor/peor mercado</b> · Mercado con más/menos PnL. Útil con meses de datos.
+
+🔻 <b>CLV (Closing Line Value)</b> · Tu cuota vs cuota de cierre. Favorable: >0 (batiste al mercado). Negativo: el mercado cerró por encima.
+
+🎯 <b>Bate al cierre</b> · % picks que batieron cierre. Favorable: >50%.
+
+🧠 <b>PnL+CLV juntos</b>:
+• PnL>0 y CLV>0 → edge real ✅
+• PnL>0 y CLV<0 → ganas sin batir mercado: posible suerte, vigila ⚠️
+• PnL<0 y CLV>0 → pierdes pero eliges bien: señal positiva a largo 🟢
+
+🎲 <b>Brier</b> (en /stats) · Error de probabilidades IA. Favorable: <0.20 bueno, <0.15 muy bueno.
+
+⚖️ <b>Gap de calibración</b> (en /stats) · Prob IA prometida − acierto real (pp). Favorable: entre −5 y +5. >+10: IA sobreestima. <−10: IA conservadora.
 """
-
-GLOSARIO_P2 = """
-📚 <b>GLOSARIO DE MÉTRICAS (2/2)</b>
-
-🔻 <b>CLV (Closing Line Value)</b>
-Tu cuota vs la cuota de cierre del mercado.
-✅ Favorable: > 0 (tomaste cuota mejor que el cierre).
-❌ Negativo: el mercado cerró por encima de tu cuota.
-
-🎯 <b>Bate al cierre</b>
-% de picks que batieron el cierre.
-✅ Favorable: > 50%.
-
-🧠 <b>Leer PnL y CLV juntos</b>
-• PnL >0 y CLV >0 → edge real: todo bien.
-• PnL >0 y CLV <0 → ganas sin batir al mercado: posible suerte a corto. Vigila.
-• PnL <0 y CLV >0 → pierdes pero eliges bien: señal positiva a largo plazo.
-
-🎲 <b>Brier</b> (en /stats)
-Error de las probabilidades de la IA.
-✅ Favorable: bajo (< 0.20 bueno; < 0.15 muy bueno).
-
-⚖️ <b>Gap de calibración</b> (en /stats)
-Prob. IA prometida − acierto real (en puntos porcentuales).
-✅ Favorable: entre −5 y +5 pp.
-⚠️ > +10: la IA se viene arriba · < −10: la IA es conservadora.
-"""
-
 def _norm(s):
     s = unicodedata.normalize('NFKD', s or '')
     s = ''.join(c for c in s if not unicodedata.combining(c))
@@ -222,15 +197,7 @@ def handle(text):
         return HELP
     
     if cmd == '/glosario':
-        # Enviar primera parte inmediatamente
-        tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P1, parse_mode='HTML')
-        
-        # Programar segunda parte con Timer (más robusto que thread simple)
-        def send_part2():
-            tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P2, parse_mode='HTML')
-        
-        threading.Timer(2.0, send_part2).start()
-        return None  # Flask responde HTTP 200 inmediatamente
+        return GLOSARIO
     
     tracker = StatsTracker()
     if not tracker.enabled:
