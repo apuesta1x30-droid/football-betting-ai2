@@ -33,7 +33,7 @@ COMMANDS = [
     {"command": "market", "description": "🎯 Rendimiento por mercado"},
     {"command": "scan", "description": "🔄 Lanzar escaneo ahora"},
     {"command": "app", "description": "🌐 Abrir dashboard"},
-    {"command": "glosario", "description": "📚 Entender las métricas"},
+    {"command": "glosario", "description": "📚 Glosario de métricas"},
     {"command": "help", "description": "❓ Menú de comandos"},
 ]
 
@@ -197,7 +197,11 @@ def handle(text):
         return HELP
     
     if cmd == '/glosario':
-        return GLOSARIO
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="📚 <b>Glosario de métricas</b>\n\nExplicación detallada de cada indicador, qué valores son favorables y cómo leerlos juntos.",
+           parse_mode='HTML',
+           reply_markup={"inline_keyboard": [[{"text": "📖 Abrir glosario completo", "url": APP_URL + "?glosario=1"}]]})
+        return None
     
     tracker = StatsTracker()
     if not tracker.enabled:
