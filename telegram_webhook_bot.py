@@ -64,8 +64,11 @@ def _norm(s):
 
 def tg(method, **data):
     try:
-        return requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
-                             json=data, timeout=10)
+        r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
+                          json=data, timeout=10)
+        if r.status_code != 200:
+            logger.error(f"Telegram HTTP {r.status_code} en /{method}: {r.text[:400]}")
+        return r
     except Exception as e:
         logger.error(f"Telegram error: {e}")
         return None
