@@ -222,10 +222,15 @@ def handle(text):
         return HELP
     
     if cmd == '/glosario':
-        # Enviar primera parte
-        tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P1, parse_mode='HTML')
-        # Segunda parte como respuesta normal
-        return GLOSARIO_P2
+        # Enviar ambas partes en un thread para no bloquear el worker
+        def send_glosario():
+            import time
+            tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P1, parse_mode='HTML')
+            time.sleep(0.5)
+            tg('sendMessage', chat_id=CHAT_ID, text=GLOSARIO_P2, parse_mode='HTML')
+        
+        threading.Thread(target=send_glosario, daemon=True).start()
+        return None  # No retornar nada, ya se envió en el thread
     
     tracker = StatsTracker()
     if not tracker.enabled:
