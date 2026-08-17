@@ -48,38 +48,14 @@ HELP = """
 /market → lista de mercados con datos
 /scan → lanzar un escaneo manual ahora
 /app → abrir el dashboard
-/glosario → entender cada métrica
+/glosario → abrir el glosario de métricas
 /help → este menú
 
 🤙 <b>Liquidación rápida</b>: reacciona a una alerta con
 👌 = acertada (WON) · 👎 = fallada (LOST)
 """.strip()
 
-GLOSARIO = """📚 <b>GLOSARIO DE MÉTRICAS</b>
 
-🔎 <b>Liquidados (✅/❌)</b> · Picks cerrados. ✅ acierto, ❌ fallo.
-
-🎯 <b>Hit rate</b> · % aciertos. Favorable: >1/cuota media. Con cuota 2.0 necesitas >50%; con 1.5 necesitas >67%.
-
-💰 <b>PnL (u)</b> · Beneficio con stake=1. Favorable: >0.
-
-📈 <b>Yield</b> · PnL/apuestas = rentabilidad real. >5% bueno, >10% excelente (raro de sostener). >20% en pocas semanas suele ser varianza.
-
-🏆 <b>Mejor/peor mercado</b> · Mercado con más/menos PnL. Útil con meses de datos.
-
-🔻 <b>CLV (Closing Line Value)</b> · Tu cuota vs cuota de cierre. Favorable: >0 (batiste al mercado). Negativo: el mercado cerró por encima.
-
-🎯 <b>Bate al cierre</b> · % picks que batieron cierre. Favorable: >50%.
-
-🧠 <b>PnL+CLV juntos</b>:
-• PnL>0 y CLV>0 → edge real ✅
-• PnL>0 y CLV<0 → ganas sin batir mercado: posible suerte, vigila ⚠️
-• PnL<0 y CLV>0 → pierdes pero eliges bien: señal positiva a largo 🟢
-
-🎲 <b>Brier</b> (en /stats) · Error de probabilidades IA. Favorable: <0.20 bueno, <0.15 muy bueno.
-
-⚖️ <b>Gap de calibración</b> (en /stats) · Prob IA prometida − acierto real (pp). Favorable: entre −5 y +5. >+10: IA sobreestima. <−10: IA conservadora.
-"""
 def _norm(s):
     s = unicodedata.normalize('NFKD', s or '')
     s = ''.join(c for c in s if not unicodedata.combining(c))
@@ -111,7 +87,7 @@ def handle_reaction(reaction):
     emojis = [r.get('emoji') for r in new if r.get('type') == 'emoji']
     status = 'won' if '👌' in emojis else ('lost' if '👎' in emojis else None)
     if not status or not msg_id:
-        return  # reacción distinta a 👌/ (p. ej. ): no hacer nada
+        return  # reacción distinta a 👌/👎 (p. ej. ⚽): no hacer nada
     
     tracker = StatsTracker()
     if not tracker.enabled:
@@ -170,17 +146,27 @@ def telegram():
     
     cmd = text.split()[0].lower().split('@')[0]
     
+    # /app → botón inline al dashboard
     if cmd == '/app':
         tg('sendMessage', chat_id=CHAT_ID,
            text="🌐 <b>Dashboard Value Bet Scanner</b>", parse_mode='HTML',
            reply_markup={"inline_keyboard": [[{"text": "🌐 Abrir scanner", "url": APP_URL}]]})
         return jsonify(ok=True)
     
+    # /scan → escaneo manual en segundo plano
     if cmd == '/scan':
         threading.Thread(target=_run_scan_async, daemon=True).start()
         tg('sendMessage', chat_id=CHAT_ID,
            text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
            parse_mode='HTML')
+        return jsonify(ok=True)
+    
+    # /glosario → mensaje corto + botón al dashboard
+    if cmd == '/glosario':
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="📚 <b>Glosario de métricas</b>\n\nExplicación detallada de cada indicador, qué valores son favorables y cómo leerlos juntos.",
+           parse_mode='HTML',
+           reply_markup={"inline_keyboard": [[{"text": "📖 Abrir glosario completo", "url": APP_URL + "?glosario=1"}]]})
         return jsonify(ok=True)
     
     reply = handle(text)
@@ -195,13 +181,6 @@ def handle(text):
     
     if cmd in ('/start', '/help'):
         return HELP
-    
-    if cmd == '/glosario':
-        tg('sendMessage', chat_id=CHAT_ID,
-           text="📚 <b>Glosario de métricas</b>\n\nExplicación detallada de cada indicador, qué valores son favorables y cómo leerlos juntos.",
-           parse_mode='HTML',
-           reply_markup={"inline_keyboard": [[{"text": "📖 Abrir glosario completo", "url": APP_URL + "?glosario=1"}]]})
-        return None
     
     tracker = StatsTracker()
     if not tracker.enabled:
@@ -254,6 +233,9 @@ def handle(text):
     return HELP
 
 
+# ==========================================
+# Arranque: webhook + botón Menú (thread separado, no bloqueante)
+# ==========================================
 def _startup():
     base = os.getenv('WEBHOOK_URL', '').strip()
     if not base:
