@@ -14,6 +14,105 @@ warnings.filterwarnings('ignore')
 from stats_tracker import StatsTracker
 
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
+# ==========================================
+# GLOSARIO (se abre con ?glosario=1 desde Telegram)
+# ==========================================
+_glosario = False
+try:
+    _glosario = st.query_params.get("glosario") == "1"
+except Exception:
+    _glosario = False
+
+if _glosario:
+    st.title("📚 Glosario de métricas")
+    st.caption("Guía completa para interpretar las estadísticas del sistema")
+    
+    st.markdown("## 🎯 Métricas de una alerta")
+    st.markdown("""
+    - **EV (%)** — Valor esperado: `(Prob. IA × cuota) − 1`. Es el margen que el sistema cree que tienes. ✅ Favorable: cuanto más alto, mejor (el sistema solo notifica EV ≥ 10% por defecto).
+    - **Prob. IA vs Prob. Casa** — La probabilidad que estima el modelo frente a la que implica la cuota (`1/cuota`). Si la IA dice más que la casa, hay value.
+    - **Stake (Kelly 1/X)** — % de banca sugerido. El sistema usa Kelly fraccionado para proteger la banca: cuanto mayor fracción (1/8), más conservador.
+    """)
+    
+    st.markdown("## 📊 Métricas de resultado")
+    st.markdown("""
+    - **Liquidados (✅/❌)** — Picks con resultado cerrado. ✅ = acierto, ❌ = fallo, ➖ = anulado.
+    - **Hit rate** — % de aciertos. **Solo no basta**: depende de la cuota media a la que apuestas.
+    - **PnL (unidades)** — Beneficio contando 1 unidad por pick. ✅ Favorable: > 0.
+    - **Yield** — `PnL / apuestas`. La rentabilidad real. Es la métrica reina a largo plazo.
+    """)
+    
+    st.markdown("### 🎯 Hit rate necesario según tu cuota media")
+    st.markdown("""
+    | Cuota media | Hit para no perder |
+    |---|---|
+    | 1.50 | 66.7% |
+    | 1.80 | 55.6% |
+    | 2.00 | 50.0% |
+    | 2.50 | 40.0% |
+    | 3.00 | 33.3% |
+    """)
+    
+    st.markdown("### 📈 Rangos de yield")
+    st.markdown("""
+    | Yield | Lectura |
+    |---|---|
+    | < 0% | En pérdidas |
+    | 0–5% | Positivo modesto |
+    | 5–10% | Bueno (nivel profesional sostenido) |
+    | > 10% | Excelente; en pocas semanas suele ser varianza |
+    """)
+    
+    st.markdown("## 🔻 Métricas de mercado (CLV)")
+    st.markdown("""
+    - **CLV (Closing Line Value)** — `(cuota tomada / cuota de cierre − 1)`. Mide si tu cuota fue mejor que la del cierre del mercado. ✅ Favorable: > 0.
+    - **Bate al cierre** — % de picks cuya cuota batió al cierre. ✅ Favorable: > 50%.
+    - El CLV es el **mejor predictor de rentabilidad futura**: puedes perder dinero a corto plazo y aun así estar jugando bien si tu CLV es positivo.
+    """)
+    
+    st.markdown("### 🧠 Cómo leer PnL y CLV juntos")
+    st.markdown("""
+    | PnL | CLV | Lectura |
+    |---|---|---|
+    | ✅ + | ✅ + | Edge real: sistema rentable y validado por el mercado |
+    | ✅ + | 🔻 − | Ganas sin batir al mercado: posible suerte a corto. Vigilar |
+    | ❌ − | ✅ + | Pierdes pero eliges bien: señal positiva a largo plazo |
+    | ❌ − | 🔻 − | Revisar modelo y umbrales |
+    """)
+    
+    st.markdown("## 🤖 Métricas del modelo")
+    st.markdown("""
+    - **Brier** — Error medio de las probabilidades de la IA (menor = mejor). ✅ < 0.20 bueno · < 0.15 muy bueno.
+    - **Gap de calibración** — Prob. IA prometida − acierto real (en puntos). ✅ Favorable: entre −5 y +5.
+      - Gap > +10: la IA sobreestima → el sistema sube solo el EV mínimo (auto-ajuste).
+      - Gap < −10: la IA es conservadora → el sistema baja el EV mínimo.
+    """)
+    
+    st.markdown("## 📖 Ejemplo real: tu semana 09/08–16/08")
+    st.markdown("""
+    | Dato | Valor | Lectura |
+    |---|---|---|
+    | Liquidados | 43 (21✅/22❌) | Muestra aún pequeña |
+    | Hit rate | 48.8% | Correcto si tu cuota media ronda 2.0 o más |
+    | PnL / Yield | +9.79 u / +22.8% | Semana excelente; con 43 picks es varianza: no esperes sostenerlo |
+    | CLV | −3.8% · bate 27% | 🔻 El mercado cerró por encima de tus cuotas |
+    
+    **Lectura combinada**: PnL ✅ + CLV 🔻 → estás ganando dinero pero sin batir al mercado.
+    Con 43 picks es normal (varianza). La señal de alarma solo aparece si tras 100–200 picks
+    el CLV sigue negativo mientras ganas: entonces el modelo no tendría edge real.
+    """)
+    
+    st.markdown("## ✅ Reglas rápidas de decisión")
+    st.markdown("""
+    1. **Yield > 0 y CLV > 0** con 100+ picks → el sistema funciona: mantén el rumbo.
+    2. **CLV negativo sostenido** → revisa umbrales de EV y calibración.
+    3. **Gap de calibración > +10** → el auto-ajuste ya está subiendo tu EV mínimo: confía en él.
+    4. **Hit rate por debajo de 1/cuota media** → estás perdiendo dinero aunque haya semanas verdes.
+    """)
+    
+    st.markdown("---")
+    st.markdown("⚠️ Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.")
+    st.stop()
 
 # ==========================================
 # CONFIGURACIÓN
