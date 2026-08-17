@@ -10,7 +10,10 @@ Reglas:
 - gap +5..+10   → leve         → EV 11%, Kelly 1/6
 - gap -5..+5    → calibrado    → EV 10%, Kelly 1/4 (default)
 - gap < -5      → conservador  → baja EV mínimo, Kelly 1/2
-Avisa por Telegram del cambio.
+
+Avisa por Telegram cuando cambia la configuración.
+Si se ejecuta MANUALMENTE (Actions → Run workflow), envía siempre el estado
+actual aunque no haya cambios, para consultarlo bajo demanda.
 """
 import os
 import sys
@@ -60,6 +63,8 @@ def decide(gap):
 
 
 def main():
+    manual = os.getenv('GITHUB_EVENT_NAME') == 'workflow_dispatch'
+
     tracker = StatsTracker()
     if not tracker.enabled:
         logger.error("❌ Supabase no configurado")
@@ -67,8 +72,13 @@ def main():
 
     s = compute_for(tracker.get_all_picks())
     if s['settled'] < MIN_SAMPLE or s['gap'] is None:
-        logger.info(f"Muestra insuficiente ({s['settled']}/{MIN_SAMPLE}) o sin gap. "
-                    f"Mantengo defaults.")
+        if manual:
+            send(f"🤖 <b>ESTADO DEL AUTO-AJUSTE</b>\n\n"
+                 f"📊 Muestra insuficiente ({s['settled']}/{MIN_SAMPLE} liquidados).\n"
+                 f"⚙️ Config por defecto: EV≥10% · Kelly 1/4\n\n"
+                 f"ℹ️ Más info: /glosario")
+        else:
+            logger.info(f"Muestra insuficiente ({s['settled']}/{MIN_SAMPLE}) o sin gap. Mantengo defaults.")
         return 0
 
     gap = s['gap']
@@ -98,16 +108,21 @@ def main():
     logger.info(f"🤖 Auto-ajuste guardado: EV≥{new_cfg['ev_notify']}% Kelly 1/{new_cfg['kelly']} "
                 f"(gap {gap:+.1f} pp, n={s['settled']})")
 
-    if changed:
-        # Interpretación del cambio para el usuario
-        if new_cfg['ev_notify'] > prev.get('ev_notify', 10):
+    if changed or manual:
+        if not changed:
+            cabecera = "🤖 <b>ESTADO DEL AUTO-AJUSTE</b> (sin cambios)"
+            lectura = "✅ Sin cambios: se mantiene la configuración actual"
+        elif new_cfg['ev_notify'] > prev.get('ev_notify', 10):
+            cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "📈 IA más afinada: subo el listón de calidad y protejo banca"
         elif new_cfg['ev_notify'] < prev.get('ev_notify', 10):
+            cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "📉 IA conservadora: bajo el listón para no perder oportunidades"
         else:
+            cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "🔄 Ajuste de Kelly según calibración detectada"
-        
-        msg = (f"🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>\n\n"
+
+        msg = (f"{cabecera}\n\n"
                f"⚖️ Gap: <b>{gap:+.1f} pp</b> ({motivo})\n"
                f"🎯 EV mínimo: {prev.get('ev_notify', 10):.0f}% → <b>{new_cfg['ev_notify']:.0f}%</b>\n"
                f"💰 Kelly: 1/{prev.get('kelly', 4)} → <b>1/{new_cfg['kelly']}</b>\n"
