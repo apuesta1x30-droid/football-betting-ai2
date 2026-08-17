@@ -109,7 +109,35 @@ if _glosario:
     3. **Gap de calibración > +10** → el auto-ajuste ya está subiendo tu EV mínimo: confía en él.
     4. **Hit rate por debajo de 1/cuota media** → estás perdiendo dinero aunque haya semanas verdes.
     """)
+    st.markdown("## 🤖 Auto-ajuste del sistema (Capa A)")
+    st.markdown("""
+    Cada día a las 06:00 UTC, el sistema mide su **gap de calibración** (Prob. IA prometida − acierto real)
+    con los picks liquidados y ajusta solo dos palancas: el **EV mínimo de notificación** y la **fracción Kelly**.
+    Se activa con ≥20 picks liquidados. Cuando cambia la configuración, recibes un aviso en Telegram.
+    """)
     
+    st.markdown("### Estados y umbrales aplicados")
+    st.markdown("""
+    | Gap de calibración | Estado | EV mínimo | Kelly | Qué significa |
+    |---|---|---|---|---|
+    | > +10 pp | Sobreestima fuerte | 12% | 1/8 | La IA promete más de lo que cumple: máxima exigencia y banca protegida |
+    | +5 a +10 pp | Sobreestima leve | 11% | 1/6 | Ligera inflación de probabilidades: algo más exigente |
+    | −5 a +5 pp | Calibrado | 10% | 1/4 | La IA predice lo que ocurre: configuración estándar |
+    | < −5 pp | Conservadora | 6% | 1/2 | La IA promete menos de lo que cumple: más oportunidades y stake mayor |
+    """)
+    
+    st.markdown("### Cómo leer el aviso de Telegram")
+    st.markdown("""
+    Ejemplo real: `Gap −1.5 pp (calibrado) · EV 6% → 10% · Kelly 1/2 → 1/4`
+    
+    Significa: antes la IA era conservadora (por eso EV 6% y Kelly 1/2); al acumular muestra,
+    el gap entró en zona calibrada y el sistema volvió a los valores estándar:
+    **exige más calidad (EV 10%) y protege más la banca (Kelly 1/4)**.
+    
+    **Regla general**:
+    - EV mínimo que SUBE + Kelly que BAJA → el sistema confía en su calibración: se vuelve exigente y seguro.
+    - EV mínimo que BAJA + Kelly que SUBE → el sistema detecta que se queda corto: aprovecha más oportunidades.
+    """)
     st.markdown("---")
     st.markdown("⚠️ Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.")
     st.stop()
