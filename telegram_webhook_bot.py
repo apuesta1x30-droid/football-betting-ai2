@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Bot de comandos de Telegram por WEBHOOK (microservicio Render).
-Comandos: /stats /week /today /pending /market /scan /app /help
+Comandos: /stats /week /today /pending /market /scan /app /glosario /help
 Además: reacciones 👌 (won) / 👎 (lost) sobre las alertas = liquidación manual.
 Solo responde al chat TELEGRAM_CHAT_ID (seguridad).
 """
@@ -33,6 +33,7 @@ COMMANDS = [
     {"command": "market", "description": "🎯 Rendimiento por mercado"},
     {"command": "scan", "description": "🔄 Lanzar escaneo ahora"},
     {"command": "app", "description": "🌐 Abrir dashboard"},
+    {"command": "glosario", "description": "📚 Entender las métricas"},
     {"command": "help", "description": "❓ Menú de comandos"},
 ]
 
@@ -47,10 +48,57 @@ HELP = """
 /market → lista de mercados con datos
 /scan → lanzar un escaneo manual ahora
 /app → abrir el dashboard
+/glosario → entender cada métrica
 /help → este menú
 
 🤙 <b>Liquidación rápida</b>: reacciona a una alerta con
 👌 = acertada (WON) · 👎 = fallada (LOST)
+""".strip()
+
+GLOSARIO = """
+📚 <b>GLOSARIO DE MÉTRICAS</b>
+
+🔎 <b>Liquidados (✅/❌)</b>
+Picks ya cerrados. ✅ = acierto, ❌ = fallo.
+
+🎯 <b>Hit rate</b>
+% de aciertos. Solo no dice todo: con cuota 2.0 necesitas >50%; con cuota 1.5, >67%.
+✅ Favorable: por encima de 1/cuota media.
+
+💰 <b>PnL (unidades)</b>
+Beneficio contando stake=1 por pick.
+✅ Favorable: > 0.
+
+📈 <b>Yield</b>
+PnL / apuestas = rentabilidad real.
+✅ >0 sostenido · 🟢 >5% bueno · 🟢 >10% excelente (raro de sostener).
+⚠️ Valores >20% en pocas semanas suelen ser varianza: espera 100+ picks.
+
+🏆/ <b>Mejor/peor mercado</b>
+Mercado con más/menos PnL del periodo. Útil para detectar sesgos con meses de datos.
+
+🔻 <b>CLV (Closing Line Value)</b>
+Tu cuota vs la cuota de cierre del mercado.
+✅ Favorable: > 0 (tomaste cuota mejor que el cierre).
+❌ Negativo: el mercado cerró por encima de tu cuota.
+
+🎯 <b>Bate al cierre</b>
+% de picks que batieron el cierre.
+✅ Favorable: > 50%.
+
+🧠 <b>Leer PnL y CLV juntos</b>
+• PnL >0 y CLV >0 → edge real: todo bien.
+• PnL >0 y CLV <0 → ganas sin batir al mercado: posible suerte a corto. Vigila.
+• PnL <0 y CLV >0 → pierdes pero eliges bien: señal positiva a largo plazo.
+
+🎲 <b>Brier</b> (en /stats)
+Error de las probabilidades de la IA.
+✅ Favorable: bajo (< 0.20 bueno; < 0.15 muy bueno).
+
+⚖️ <b>Gap de calibración</b> (en /stats)
+Prob. IA prometida − acierto real (en puntos porcentuales).
+✅ Favorable: entre −5 y +5 pp.
+⚠️ > +10: la IA se viene arriba · < −10: la IA es conservadora.
 """.strip()
 
 
@@ -85,7 +133,7 @@ def handle_reaction(reaction):
     emojis = [r.get('emoji') for r in new if r.get('type') == 'emoji']
     status = 'won' if '👌' in emojis else ('lost' if '👎' in emojis else None)
     if not status or not msg_id:
-        return  # reacción distinta a 👌/👎 (p. ej. ⚽): no hacer nada
+        return  # reacción distinta a 👌/ (p. ej. ): no hacer nada
     
     tracker = StatsTracker()
     if not tracker.enabled:
@@ -169,6 +217,9 @@ def handle(text):
     
     if cmd in ('/start', '/help'):
         return HELP
+    
+    if cmd == '/glosario':
+        return GLOSARIO
     
     tracker = StatsTracker()
     if not tracker.enabled:
