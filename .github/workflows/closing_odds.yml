@@ -32,6 +32,8 @@ jobs:
     - name: Capture closing odds
       env:
         THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        THE_ODDS_API_KEY_2: ${{ secrets.THE_ODDS_API_KEY_2 }}
+        THE_ODDS_API_KEY_3: ${{ secrets.THE_ODDS_API_KEY_3 }}
         SUPABASE_URL_FB: ${{ secrets.SUPABASE_URL_FB }}
         SUPABASE_KEY_FB: ${{ secrets.SUPABASE_KEY_FB }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
