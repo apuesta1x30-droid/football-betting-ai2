@@ -913,18 +913,18 @@ if st.button("📤 Exportar Datos Ahora"):
                 g = Github(github_token)
                 repo = g.get_repo(repo_name)
                 
-                # Recopilar métricas calculadas previamente en el script
+                # Recopilar métricas con verificación de existencia
                 export_data = {
-                    "total_picks": hist_stats.get('total', 0),
-                    "liquidados": hist_stats.get('settled', 0),
-                    "pendientes": hist_stats.get('pending', 0),
-                    "aciertos": hist_stats.get('wins', 0),
-                    "errores": hist_stats.get('losses', 0),
-                    "hit_rate": round(hist_stats.get('hit_rate', 0), 1),
-                    "pnl": round(hist_stats.get('pnl', 0), 2),
-                    "yield": round(hist_stats.get('yield', 0), 1),
-                    "ev_medio": round(hist_stats.get('avg_ev_declared', 0), 1) if hist_stats.get('avg_ev_declared') is not None else 0.0,
-                    "sobreestimacion": round(hist_stats.get('calibration_gap', 0), 1) if hist_stats.get('calibration_gap') is not None else 0.0,
+                    "total_picks": hist_stats.get('total', 0) if 'hist_stats' in locals() else 0,
+                    "liquidados": hist_stats.get('settled', 0) if 'hist_stats' in locals() else 0,
+                    "pendientes": hist_stats.get('pending', 0) if 'hist_stats' in locals() else 0,
+                    "aciertos": hist_stats.get('wins', 0) if 'hist_stats' in locals() else 0,
+                    "errores": hist_stats.get('losses', 0) if 'hist_stats' in locals() else 0,
+                    "hit_rate": round(hist_stats.get('hit_rate', 0), 1) if 'hist_stats' in locals() else 0.0,
+                    "pnl": round(hist_stats.get('pnl', 0), 2) if 'hist_stats' in locals() else 0.0,
+                    "yield": round(hist_stats.get('yield', 0), 1) if 'hist_stats' in locals() else 0.0,
+                    "ev_medio": round(hist_stats.get('avg_ev_declared', 0), 1) if 'hist_stats' in locals() and hist_stats.get('avg_ev_declared') is not None else 0.0,
+                    "sobreestimacion": round(hist_stats.get('calibration_gap', 0), 1) if 'hist_stats' in locals() and hist_stats.get('calibration_gap') is not None else 0.0,
                     "clv_medio": round(avg_clv, 1) if 'avg_clv' in locals() else 0.0,
                     "bate_cierre_pct": round(beat_pct, 1) if 'beat_pct' in locals() else 0.0,
                     "ultima_actualizacion": datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -932,11 +932,14 @@ if st.button("📤 Exportar Datos Ahora"):
                 
                 # Añadir mejor mercado si existe
                 if 'market_stats' in locals() and market_stats:
-                    df_m = pd.DataFrame(market_stats).T
-                    if not df_m.empty and 'Yield' in df_m.columns:
-                        best_market = df_m['Yield'].idxmax()
-                        export_data["mejor_mercado"] = str(best_market)
-                        export_data["yield_mejor_mercado"] = round(float(df_m.loc[best_market, 'Yield']), 1)
+                    try:
+                        df_m = pd.DataFrame(market_stats).T
+                        if not df_m.empty and 'Yield' in df_m.columns:
+                            best_market = df_m['Yield'].idxmax()
+                            export_data["mejor_mercado"] = str(best_market)
+                            export_data["yield_mejor_mercado"] = round(float(df_m.loc[best_market, 'Yield']), 1)
+                    except Exception as e:
+                        st.warning(f"⚠️ No se pudo calcular el mejor mercado: {e}")
 
                 content = json.dumps(export_data, indent=4, ensure_ascii=False)
                 
