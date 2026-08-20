@@ -8,3 +8,4 @@ supabase>=2.5.0
 flask>=2.3.0
 gunicorn>=21.0.0
 plotly>=5.18.0
+PyGithub==2.1.1
