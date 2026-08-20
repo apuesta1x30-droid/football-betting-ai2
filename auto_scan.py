@@ -7,7 +7,7 @@ v0.5-B · Escaneo automático de value bets con auto-ajuste dinámico.
   en formato normal para poder liquidarlos manualmente con 👌/👎
 - Registra picks en Supabase con features del modelo y message_id de Telegram
 - Filtra por hora actual (solo partidos futuros)
-- Deduplica picks ya registrados (no re-alerta en scans posteriores)
+- Deduplica picks ya alertados (no re-alerta en scans posteriores)
 - Lista negra empírica de ligas (n≥8 y PnL≤-5)
 - The Odds API con rotación de claves (odds_client)
 """
@@ -33,14 +33,13 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-EV_THRESHOLD_MIN = 2.0  # Umbral mínimo para registrar en BD (fijo)
-DEFAULT_EV_NOTIFY = 10.0  # Default si no hay auto-ajuste
-DEFAULT_KELLY = 4  # Default: Kelly 1/4
+EV_THRESHOLD_MIN = 2.0
+DEFAULT_EV_NOTIFY = 10.0
+DEFAULT_KELLY = 4
 META_KEY_AUTO_TUNE = 'auto_tune'
 
 
 def load_auto_tune_config(tracker):
-    """Lee la configuración dinámica guardada por auto_tune.py."""
     cfg = {'ev_notify': DEFAULT_EV_NOTIFY, 'kelly': DEFAULT_KELLY, 'gap': None, 'n': None}
     if not tracker or not tracker.enabled:
         return cfg
@@ -57,8 +56,8 @@ def load_auto_tune_config(tracker):
         logger.debug(f"No se pudo leer auto_tune config: {e}")
     return cfg
 
+
 def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
-    """Ligas con evidencia negativa suficiente (n≥min_n y PnL≤min_pnl)."""
     if not tracker or not tracker.enabled:
         return set()
     agg = {}
@@ -76,7 +75,6 @@ def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
 
 
 def send_telegram_message(message, parse_mode="HTML"):
-    """Envía mensaje a Telegram y devuelve el message_id (o None si falla)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Telegram no configurado")
         return None
@@ -103,7 +101,6 @@ def send_telegram_message(message, parse_mode="HTML"):
 
 
 def format_value_bet_alert(vb, kelly_fraction):
-    """Formatea una value bet como mensaje de alerta para Telegram."""
     stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'], fraction=kelly_fraction)
     return (
         f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
@@ -121,7 +118,6 @@ def format_value_bet_alert(vb, kelly_fraction):
 
 
 def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
-    """Formatea el resumen del escaneo con la configuración activa."""
     config_line = f"🤖 Config activa: EV≥{cfg['ev_notify']:.0f}% · Kelly 1/{cfg['kelly']}"
     if cfg['gap'] is not None:
         config_line += f" (gap {cfg['gap']:+.1f} pp)"
@@ -139,7 +135,6 @@ def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
 
 
 def calculate_kelly_stake(prob, odd, fraction=4):
-    """Calcula stake usando Kelly fraccionado (1/fraction)."""
     if prob <= 0 or odd <= 1:
         return 0.0
     kelly = (prob * odd - 1) / (odd - 1)
@@ -147,7 +142,6 @@ def calculate_kelly_stake(prob, odd, fraction=4):
 
 
 def load_models():
-    """Carga los modelos XGBoost entrenados."""
     models = {}
     try:
         models['over15'] = joblib.load('model_over15.pkl')
@@ -163,7 +157,6 @@ def load_models():
 
 
 def load_team_database():
-    """Carga la base de datos de equipos."""
     try:
         df_teams = pd.read_csv('team_stats_db.csv')
         team_db = df_teams.set_index('Team').to_dict('index')
@@ -175,7 +168,6 @@ def load_team_database():
 
 
 def get_team_stats(team_name, team_db):
-    """Obtiene estadísticas de un equipo (o defaults si no existe)."""
     default_stats = {
         'Last_Form_Pts': 7,
         'Last_Goals_Scored_Avg': 1.4,
@@ -203,7 +195,6 @@ def get_team_stats(team_name, team_db):
 
 
 def calculate_double_chance_probs(models, features):
-    """Calcula probabilidades de doble oportunidad desde 1X2."""
     probs_1x2 = models['1x2'].predict_proba(features)[0]
     return {
         '1X': probs_1x2[0] + probs_1x2[1],
@@ -213,7 +204,6 @@ def calculate_double_chance_probs(models, features):
 
 
 def calculate_over05_ht_prob(prob_over25):
-    """Calcula probabilidad de Over 0.5 goles en 1ª parte."""
     base_prob = 0.70
     correlation_factor = prob_over25 * 0.3
     prob_method1 = min(base_prob + correlation_factor, 0.90)
@@ -223,14 +213,12 @@ def calculate_over05_ht_prob(prob_over25):
 
 
 def scan_value_bets():
-    """Escanea mercados y detecta value bets."""
     logger.info("🚀 Iniciando escaneo automático...")
     
     if not get_keys():
         logger.error("❌ No hay claves de The Odds API configuradas")
         return 1
     
-    # Cargar configuración dinámica (Capa A del auto-aprendizaje)
     tracker = StatsTracker()
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
@@ -250,7 +238,6 @@ def scan_value_bets():
     
     team_db = load_team_database()
     
-    # Obtener fixtures de The Odds API (con rotación de claves)
     response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
         "markets": "h2h,totals",
@@ -263,7 +250,6 @@ def scan_value_bets():
     
     logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
     
-    # Analizar cada partido
     value_bets = []
     now = datetime.now(timezone.utc)
     stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
@@ -284,7 +270,6 @@ def scan_value_bets():
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
         now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
         
-        # Solo partidos que aún no han empezado
         if match_time_es <= now_es:
             continue
         
@@ -315,7 +300,6 @@ def scan_value_bets():
         dc_probs = calculate_double_chance_probs(models, features)
         prob_over05_ht = calculate_over05_ht_prob(prob_over25)
         
-        # Buscar mejor cuota para cada mercado
         best_odds = {}
         
         for bookmaker in event.get("bookmakers", []):
@@ -345,7 +329,6 @@ def scan_value_bets():
                         if key not in best_odds or odd > best_odds[key]:
                             best_odds[key] = odd
         
-        # Analizar cada mercado con cuota disponible
         for market_key, odd in best_odds.items():
             prob = None
             mercado_name = None
@@ -411,17 +394,14 @@ def scan_value_bets():
                     "Features": features.iloc[0].to_dict()
                 })
     
-    # Enviar resumen y alertas
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
         
-        # Top 10 con el umbral DINÁMICO (ev_notify)
         top10 = sorted(
             [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
             key=lambda x: -x['EV (%)']
         )[:10]
         
-        # Banner de modo seguridad (los picks se envían igual debajo)
         if safety_mode:
             send_telegram_message(
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
@@ -432,8 +412,7 @@ def scan_value_bets():
                 f"ℹ️ Más info: /glosario")
         
         if top10:
-            # Solo se omite lo que YA tiene mensaje de Telegram.
-            # Los picks registrados sin mensaje (modo seguridad antiguo) se alertan ahora.
+            # Deduplicación por telegram_message_id (no por registro en BD)
             todos = tracker.get_all_picks()
             con_msg = {p.get('raw_hash') for p in todos if p.get('telegram_message_id')}
             sin_msg = {p.get('raw_hash'): p['id'] for p in todos
@@ -447,7 +426,6 @@ def scan_value_bets():
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
                     if h in sin_msg:
-                        # Vincula el mensaje al pick ya registrado (para que 👌/👎 funcione)
                         tracker.client.table(tracker.table).update(
                             {'telegram_message_id': msg_id}).eq('id', sin_msg[h]).execute()
                 time.sleep(0.5)
@@ -460,7 +438,6 @@ def scan_value_bets():
                 f"💡 Mercado eficiente en las próximas horas."
             )
         
-        # Registro en BD después del envío
         registered_count = 0
         for vb in value_bets:
             if tracker.register_pick(vb):
