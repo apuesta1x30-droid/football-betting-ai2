@@ -14,6 +14,7 @@ warnings.filterwarnings('ignore')
 from stats_tracker import StatsTracker
 
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
+
 # ==========================================
 # GLOSARIO (se abre con ?glosario=1 desde Telegram)
 # ==========================================
@@ -885,11 +886,17 @@ else:
                        margin=dict(t=50, b=40))
     st.plotly_chart(fig4, use_container_width=True)
 
+# ==========================================
+# FOOTER
+# ==========================================
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9em;'>
     <p>⚠️ <strong>Aviso:</strong> Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.</p>
     <p>🧠 Powered by XGBoost + API-Football + The Odds API</p>
+</div>
+""", unsafe_allow_html=True)
+
 # ==========================================
 # EXPORTAR DATOS PARA EL BOT DE TELEGRAM
 # ==========================================
@@ -913,7 +920,7 @@ if st.button("📤 Exportar Datos Ahora"):
                 g = Github(github_token)
                 repo = g.get_repo(repo_name)
                 
-                # Recopilar métricas con verificación de existencia
+                # Recopilar métricas con verificación de existencia segura
                 export_data = {
                     "total_picks": hist_stats.get('total', 0) if 'hist_stats' in locals() else 0,
                     "liquidados": hist_stats.get('settled', 0) if 'hist_stats' in locals() else 0,
@@ -925,8 +932,8 @@ if st.button("📤 Exportar Datos Ahora"):
                     "yield": round(hist_stats.get('yield', 0), 1) if 'hist_stats' in locals() else 0.0,
                     "ev_medio": round(hist_stats.get('avg_ev_declared', 0), 1) if 'hist_stats' in locals() and hist_stats.get('avg_ev_declared') is not None else 0.0,
                     "sobreestimacion": round(hist_stats.get('calibration_gap', 0), 1) if 'hist_stats' in locals() and hist_stats.get('calibration_gap') is not None else 0.0,
-                    "clv_medio": round(avg_clv, 1) if 'avg_clv' in locals() else 0.0,
-                    "bate_cierre_pct": round(beat_pct, 1) if 'beat_pct' in locals() else 0.0,
+                    "clv_medio": round(locals().get('avg_clv', 0.0), 1),
+                    "bate_cierre_pct": round(locals().get('beat_pct', 0.0), 1),
                     "ultima_actualizacion": datetime.now().strftime("%d/%m/%Y %H:%M")
                 }
                 
@@ -958,5 +965,3 @@ if st.button("📤 Exportar Datos Ahora"):
         st.error("❌ Falta la librería `PyGithub`. Añádela a tu requirements.txt de Streamlit y espera a que se reinicie la app.")
     except Exception as e:
         st.error(f"❌ Error al exportar: {e}")
-</div>
-""", unsafe_allow_html=True)
