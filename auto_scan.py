@@ -427,7 +427,7 @@ def scan_value_bets():
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
                 f"NO apuestes dinero real: picks enviados solo para registro.\n"
-                f"Puedes liquidarlos manualmente con 👌/.\n"
+                f"Puedes liquidarlos manualmente con 👌/👎.\n"
                 f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
                 f"ℹ️ Más info: /glosario")
         
