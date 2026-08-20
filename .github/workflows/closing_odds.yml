@@ -2,7 +2,8 @@ name: Closing Odds (CLV)
 
 on:
   schedule:
-    - cron: '0 8,14,20 * * *'   # 3 capturas diarias
+    - cron: '0 12 * * *'
+    - cron: '0 20 * * *'
   workflow_dispatch:
     inputs:
       test:
