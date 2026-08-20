@@ -54,6 +54,23 @@ def load_auto_tune_config(tracker):
         logger.debug(f"No se pudo leer auto_tune config: {e}")
     return cfg
 
+def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
+    """Ligas con evidencia negativa suficiente (n≥min_n y PnL≤min_pnl)."""
+    if not tracker or not tracker.enabled:
+        return set()
+    agg = {}
+    for p in tracker.get_all_picks():
+        if p.get('status') not in ('won', 'lost'):
+            continue
+        lg = p.get('liga') or '?'
+        a = agg.setdefault(lg, {'n': 0, 'pnl': 0.0})
+        a['n'] += 1
+        if p['status'] == 'won':
+            a['pnl'] += (p.get('cuota') or 2.0) - 1.0
+        else:
+            a['pnl'] -= 1.0
+    return {lg for lg, a in agg.items() if a['n'] >= min_n and a['pnl'] <= min_pnl}
+
 
 def send_telegram_message(message, parse_mode="HTML"):
     """Envía mensaje a Telegram y devuelve el message_id (o None si falla)."""
@@ -100,11 +117,13 @@ def format_value_bet_alert(vb, kelly_fraction):
     )
 
 
-def format_summary_message(stats, value_bets, cfg):
+def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
     """Formatea el resumen del escaneo con la configuración activa."""
     config_line = f"🤖 Config activa: EV≥{cfg['ev_notify']:.0f}% · Kelly 1/{cfg['kelly']}"
     if cfg['gap'] is not None:
         config_line += f" (gap {cfg['gap']:+.1f} pp)"
+    if n_blacklist:
+        config_line += f" · 🚫 {n_blacklist} ligas excluidas"
     
     return (
         f"📊 <b>RESUMEN DEL ESCANEO</b>\n\n"
@@ -213,8 +232,13 @@ def scan_value_bets():
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
     kelly_fraction = cfg['kelly']
+    safety_mode = cfg['gap'] is not None and cfg['gap'] > 15
+    blacklist = league_blacklist(tracker)
     logger.info(f"🤖 Auto-ajuste: EV≥{ev_notify:.0f}% · Kelly 1/{kelly_fraction} "
                 f"(gap={cfg['gap']}, n={cfg['n']})")
+    logger.info(f"🚫 Ligas en lista negra ({len(blacklist)}): {sorted(blacklist)}")
+    if safety_mode:
+        logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +15 → sin alertas de apuesta")
     
     models = load_models()
     if not models:
@@ -250,6 +274,8 @@ def scan_value_bets():
     
     for event in fixtures_data:
         league = event.get("sport_title", "Unknown")
+        if league in blacklist:
+            continue
         home_team = event["home_team"]
         away_team = event["away_team"]
         commence_time = event["commence_time"]
@@ -391,7 +417,7 @@ def scan_value_bets():
     
     # Enviar resumen y alertas
     if value_bets:
-        send_telegram_message(format_summary_message(stats, value_bets, cfg))
+        send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
         
         # Top 10 con el umbral DINÁMICO (ev_notify)
         top10 = sorted(
@@ -399,7 +425,15 @@ def scan_value_bets():
             key=lambda x: -x['EV (%)']
         )[:10]
         
-        if top10:
+        if safety_mode:
+            send_telegram_message(
+                f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
+                f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
+                f"Hoy no se envían recomendaciones de apuesta.\n"
+                f"El sistema sigue registrando datos para recalibrarse.\n"
+                f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
+                f"ℹ️ Más info: /glosario")
+        elif top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
                 if tracker.hash_pick(vb) in ya_registrados:
