@@ -232,7 +232,7 @@ def scan_value_bets():
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
     kelly_fraction = cfg['kelly']
-    safety_mode = cfg['gap'] is not None and cfg['gap'] > 15
+    safety_mode = cfg['gap'] is not None and cfg['gap'] > 10
     blacklist = league_blacklist(tracker)
     logger.info(f"🤖 Auto-ajuste: EV≥{ev_notify:.0f}% · Kelly 1/{kelly_fraction} "
                 f"(gap={cfg['gap']}, n={cfg['n']})")
