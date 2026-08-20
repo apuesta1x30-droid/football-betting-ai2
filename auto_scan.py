@@ -426,13 +426,39 @@ def scan_value_bets():
         )[:10]
         
         if safety_mode:
+            # Enviar banner de modo seguridad
             send_telegram_message(
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
-                f"Hoy no se envían recomendaciones de apuesta.\n"
-                f"El sistema sigue registrando datos para recalibrarse.\n"
+                f"Los picks se registran pero NO se recomienda apostar.\n"
+                f"Puedes liquidar manualmente con 👌/👎 si lo deseas.\n"
                 f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
                 f"ℹ️ Más info: /glosario")
+            
+            # Enviar picks como informativos (sin Kelly, sin recomendación)
+            ya_registrados = tracker.get_registered_hashes()
+            for vb in top10:
+                if tracker.hash_pick(vb) in ya_registrados:
+                    logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
+                    continue
+                # Formato informativo (sin stake)
+                msg = (
+                    f"📝 <b>SOLO REGISTRO (MODO SEGURIDAD)</b>\n\n"
+                    f"🏆 <b>{vb['Liga']}</b>\n"
+                    f"⚽ {vb['Partido']}\n"
+                    f"🕐 {vb['Hora']}\n\n"
+                    f"📊 <b>{vb['Mercado']}</b>\n"
+                    f"💰 Cuota: <b>{vb['Cuota']:.2f}</b>\n"
+                    f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
+                    f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
+                    f"📈 EV: {vb['EV (%)']:+.1f}%\n\n"
+                    f"🚫 <b>NO APOSTAR</b> — modelo descalibrado\n"
+                    f"💡 Liquidable manualmente con 👌/👎"
+                )
+                msg_id = send_telegram_message(msg)
+                if msg_id:
+                    vb['Telegram Msg ID'] = msg_id
+                time.sleep(0.5)
         elif top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
