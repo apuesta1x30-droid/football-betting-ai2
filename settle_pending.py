@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Liquidación masiva de picks pendientes con TheSportsDB (gratis).
-Consulta resultados por fecha (1 request por fecha) y liquida automáticamente.
-Mercados de 1ª parte se dejan pendientes (sin dato fiable de HT).
+Liquidación masiva de picks pendientes con la API pública de ESPN.
+Gratis, sin key. 1 request por (liga, fecha).
+Ligas no mapeadas o sin cobertura quedan pendientes.
 """
 import os
 import sys
@@ -21,7 +21,70 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-BASE = "https://www.thesportsdb.com/api/v1/json/123"
+ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/{}/scoreboard"
+
+# Mapa: patrón (liga normalizada de The Odds API) → slug ESPN
+LEAGUE_MAP = [
+    ('england championship', 'eng.2'),
+    ('england league one', 'eng.3'),
+    ('england league two', 'eng.4'),
+    ('england premier', 'eng.1'),
+    ('spain la liga 2', 'esp.2'),
+    ('spain la liga', 'esp.1'),
+    ('germany 2. bundesliga', 'ger.2'),
+    ('germany bundesliga', 'ger.1'),
+    ('italy serie b', 'ita.2'),
+    ('italy serie a', 'ita.1'),
+    ('france ligue 2', 'fra.2'),
+    ('france ligue 1', 'fra.1'),
+    ('netherlands eerste divisie', 'ned.2'),
+    ('netherlands eredivisie', 'ned.1'),
+    ('portugal primeira', 'por.1'),
+    ('portugal liga', 'por.1'),
+    ('norway eliteserien', 'nor.1'),
+    ('norway obos', 'nor.2'),
+    ('sweden allsvenskan', 'swe.1'),
+    ('sweden superettan', 'swe.2'),
+    ('denmark superliga', 'den.1'),
+    ('finland veikkausliiga', 'fin.1'),
+    ('finland ykkonen', 'fin.2'),
+    ('iceland urvalsdeild', 'ice.1'),
+    ('austria bundesliga', 'aut.1'),
+    ('switzerland super league', 'swi.1'),
+    ('belgium', 'bel.1'),
+    ('scotland championship', 'sco.2'),
+    ('scotland premiership', 'sco.1'),
+    ('turkey', 'tur.1'),
+    ('greece', 'gre.1'),
+    ('russia', 'rus.1'),
+    ('poland', 'pol.1'),
+    ('czech', 'cze.1'),
+    ('croatia', 'cro.1'),
+    ('estonia', 'est.1'),
+    ('saudi', 'ksa.1'),
+    ('japan', 'jpn.1'),
+    ('south korea', 'kor.1'),
+    ('china', 'chn.1'),
+    ('australia', 'aus.1'),
+    ('usa mls', 'usa.1'),
+    ('mexico', 'mex.1'),
+    ('brazil serie b', 'bra.2'),
+    ('brazil', 'bra.1'),
+    ('argentina', 'arg.1'),
+    ('chile', 'chi.1'),
+    ('colombia', 'col.1'),
+    ('uruguay', 'uru.1'),
+    ('paraguay', 'par.1'),
+    ('ecuador', 'ecu.1'),
+    ('peru', 'per.1'),
+    ('bolivia', 'bol.1'),
+    ('venezuela', 'ven.1'),
+    ('romania', 'rou.1'),
+    ('hungary', 'hun.1'),
+    ('ukraine', 'ukr.1'),
+    ('serbia', 'srb.1'),
+    ('bulgaria', 'bul.1'),
+]
 
 
 def send_telegram(message):
@@ -53,60 +116,85 @@ def sim(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
-def get_events_day(date_str, cache):
-    """Devuelve los eventos de fútbol de una fecha (con caché por fecha)."""
-    if date_str in cache:
-        return cache[date_str]
+def league_to_slug(liga):
+    nl = norm(liga)
+    for pattern, slug in LEAGUE_MAP:
+        if pattern in nl:
+            return slug
+    return None
+
+
+def get_scoreboard(slug, date_str, cache):
+    key = (slug, date_str)
+    if key in cache:
+        return cache[key]
     events = []
     try:
-        r = requests.get(f"{BASE}/eventsday.php",
-                         params={"d": date_str, "s": "Soccer"}, timeout=15)
+        r = requests.get(ESPN.format(slug),
+                         params={"dates": date_str.replace('-', '')}, timeout=15)
         if r.status_code == 200:
             events = r.json().get("events") or []
-            logger.info(f"📅 {date_str}: {len(events)} eventos de fútbol")
+            logger.info(f"📡 ESPN {slug} · {date_str}: {len(events)} eventos")
         else:
-            logger.error(f"❌ TheSportsDB {date_str}: HTTP {r.status_code}")
+            logger.warning(f"⚠️ ESPN {slug} · {date_str}: HTTP {r.status_code}")
     except Exception as e:
-        logger.error(f"❌ TheSportsDB {date_str}: {e}")
-    cache[date_str] = events
-    time.sleep(1.2)  # rate limit del tier gratuito
+        logger.error(f"❌ ESPN {slug} · {date_str}: {e}")
+    cache[key] = events
+    time.sleep(0.6)
     return events
 
 
-def find_match(events, home, away):
-    """Busca el evento que mejor casa con los equipos del pick."""
+def extract_match(ev):
+    """Devuelve (home, away, score_home, score_away, completed) o None."""
+    try:
+        comp = ev["competitions"][0]
+        home = away = None
+        for c in comp["competitors"]:
+            team_name = (c.get("team", {}).get("displayName")
+                         or c.get("team", {}).get("name") or "")
+            score = c.get("score")
+            if c.get("homeAway") == "home":
+                home = (team_name, score)
+            elif c.get("homeAway") == "away":
+                away = (team_name, score)
+        completed = ev.get("status", {}).get("type", {}).get("completed", False)
+        if not home or not away:
+            return None
+        return home[0], away[0], home[1], away[1], completed
+    except Exception:
+        return None
+
+
+def find_in_events(events, home, away):
     nh, na = norm(home), norm(away)
     best, best_score = None, 0.0
     for ev in events:
-        eh = norm(ev.get("strHomeTeam") or "")
-        ea = norm(ev.get("strAwayTeam") or "")
-        score = sim(nh, eh) + sim(na, ea)
-        if score > best_score:
-            best_score, best = score, ev
+        m = extract_match(ev)
+        if not m:
+            continue
+        s = sim(nh, norm(m[0])) + sim(na, norm(m[1]))
+        if s > best_score:
+            best_score, best = s, m
     return best if best_score >= 1.6 else None
 
 
 def parse_pick_date(hora):
-    """Convierte 'DD/MM HH:MM' a fecha ISO, gestionando el cruce de año."""
     try:
         date_part = hora.split()[0]
         day, month = date_part.split('/')
         today = datetime.now(timezone.utc).date()
-        year = today.year
-        d = datetime(year, int(month), int(day)).date()
+        d = datetime(today.year, int(month), int(day)).date()
         if d > today + timedelta(days=1):
-            d = datetime(year - 1, int(month), int(day)).date()
+            d = datetime(today.year - 1, int(month), int(day)).date()
         return d.isoformat(), d
     except Exception:
         return None, None
 
 
 def evaluate_pick(pick, hg, ag):
-    """Evalúa won/lost con el resultado (hg=goles local, ag=goles visitante)."""
     mercado = (pick.get('mercado') or '').lower()
     total = hg + ag
 
-    # Mercados de 1ª parte: sin dato fiable → no liquidar
     if '1ª parte' in mercado or ' ht' in mercado:
         return None
 
@@ -157,7 +245,7 @@ def evaluate_pick(pick, hg, ag):
 
 
 def main():
-    logger.info("🚀 Iniciando liquidación masiva (TheSportsDB)...")
+    logger.info("🚀 Iniciando liquidación masiva (ESPN)...")
 
     tracker = StatsTracker()
     if not tracker.enabled:
@@ -172,7 +260,8 @@ def main():
     logger.info(f"📋 {len(pending)} picks pendientes")
 
     cache = {}
-    settled = won = lost = void = skipped = not_found = 0
+    unmapped = set()
+    settled = won = lost = void = skipped = not_found = future = 0
 
     for pick in pending:
         partido = pick.get('partido', '')
@@ -181,29 +270,32 @@ def main():
             continue
         home, away = partido.split(' vs ', 1)
 
+        slug = league_to_slug(pick.get('liga', ''))
+        if not slug:
+            unmapped.add(pick.get('liga', '?'))
+            skipped += 1
+            continue
+
         date_str, d = parse_pick_date(pick.get('hora', ''))
         if not date_str:
             skipped += 1
             continue
-
-        # Partidos de hoy o futuros: aún no jugados
         if d >= datetime.now(timezone.utc).date():
-            not_found += 1
+            future += 1
             continue
 
-        events = get_events_day(date_str, cache)
-        ev = find_match(events, home, away)
-        if not ev:
+        events = get_scoreboard(slug, date_str, cache)
+        m = find_in_events(events, home, away)
+        if not m:
             not_found += 1
-            logger.info(f"⏳ {partido} ({date_str}): sin coincidencia en TheSportsDB")
+            logger.info(f"⏳ {partido} ({slug} · {date_str}): sin coincidencia")
             continue
 
-        hg = ev.get('intHomeScore')
-        ag = ev.get('intAwayScore')
-        if hg is None or ag is None or str(hg).strip() == '' or str(ag).strip() == '':
+        eh, ea, sh, sa, completed = m
+        if not completed or sh is None or sa is None or str(sh).strip() == '' or str(sa).strip() == '':
             not_found += 1
             continue
-        hg, ag = int(hg), int(ag)
+        hg, ag = int(float(sh)), int(float(sa))
 
         status = evaluate_pick(pick, hg, ag)
         if status is None:
@@ -223,10 +315,13 @@ def main():
             void += 1
             logger.info(f"➖ {partido}: VOID")
 
+    if unmapped:
+        logger.info(f"️ Ligas sin mapear ESPN ({len(unmapped)}): {sorted(unmapped)}")
+
     summary = (f"🤖 <b>LIQUIDACIÓN MASIVA COMPLETADA</b>\n\n"
                f"📊 Liquidados: {settled} (✅ {won} · ❌ {lost} · ➖ {void})\n"
-               f"⏳ Sin resultado aún: {not_found}\n"
-               f"⏭️ Omitidos (HT/no reconocidos): {skipped}\n\n"
+               f"⏳ Sin resultado: {not_found} · Futuros: {future}\n"
+               f"⏭️ Omitidos (HT/liga sin mapear): {skipped}\n\n"
                f"💡 Usa /stats para ver el rendimiento actualizado.")
     send_telegram(summary)
     logger.info(f"✅ Liquidación completada: {settled} procesados")
