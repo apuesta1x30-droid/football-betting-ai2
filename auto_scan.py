@@ -432,14 +432,24 @@ def scan_value_bets():
                 f"ℹ️ Más info: /glosario")
         
         if top10:
-            ya_registrados = tracker.get_registered_hashes()
+            # Solo se omite lo que YA tiene mensaje de Telegram.
+            # Los picks registrados sin mensaje (modo seguridad antiguo) se alertan ahora.
+            todos = tracker.get_all_picks()
+            con_msg = {p.get('raw_hash') for p in todos if p.get('telegram_message_id')}
+            sin_msg = {p.get('raw_hash'): p['id'] for p in todos
+                       if not p.get('telegram_message_id')}
             for vb in top10:
-                if tracker.hash_pick(vb) in ya_registrados:
+                h = tracker.hash_pick(vb)
+                if h in con_msg:
                     logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
                     continue
                 msg_id = send_telegram_message(format_value_bet_alert(vb, kelly_fraction))
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
+                    if h in sin_msg:
+                        # Vincula el mensaje al pick ya registrado (para que 👌/👎 funcione)
+                        tracker.client.table(tracker.table).update(
+                            {'telegram_message_id': msg_id}).eq('id', sin_msg[h]).execute()
                 time.sleep(0.5)
         else:
             send_telegram_message(
