@@ -890,5 +890,70 @@ st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9em;'>
     <p>⚠️ <strong>Aviso:</strong> Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.</p>
     <p>🧠 Powered by XGBoost + API-Football + The Odds API</p>
+# ==========================================
+# EXPORTAR DATOS PARA EL BOT DE TELEGRAM
+# ==========================================
+st.markdown("---")
+st.subheader("🤖 Exportar Estadísticas a GitHub")
+st.caption("Genera un archivo `datos.json` en tu repositorio para que el bot de Telegram lo lea automáticamente.")
+
+if st.button("📤 Exportar Datos Ahora"):
+    try:
+        from github import Github
+        import json
+        from datetime import datetime
+        
+        repo_name = os.getenv("GITHUB_REPO_NAME")
+        github_token = os.getenv("GITHUB_TOKEN")
+        
+        if not github_token or not repo_name:
+            st.error("❌ Falta configurar GITHUB_TOKEN o GITHUB_REPO_NAME en los Secrets de Streamlit.")
+        else:
+            with st.spinner("Conectando con GitHub y exportando datos..."):
+                g = Github(github_token)
+                repo = g.get_repo(repo_name)
+                
+                # Recopilar métricas calculadas previamente en el script
+                export_data = {
+                    "total_picks": hist_stats.get('total', 0),
+                    "liquidados": hist_stats.get('settled', 0),
+                    "pendientes": hist_stats.get('pending', 0),
+                    "aciertos": hist_stats.get('wins', 0),
+                    "errores": hist_stats.get('losses', 0),
+                    "hit_rate": round(hist_stats.get('hit_rate', 0), 1),
+                    "pnl": round(hist_stats.get('pnl', 0), 2),
+                    "yield": round(hist_stats.get('yield', 0), 1),
+                    "ev_medio": round(hist_stats.get('avg_ev_declared', 0), 1) if hist_stats.get('avg_ev_declared') is not None else 0.0,
+                    "sobreestimacion": round(hist_stats.get('calibration_gap', 0), 1) if hist_stats.get('calibration_gap') is not None else 0.0,
+                    "clv_medio": round(avg_clv, 1) if 'avg_clv' in locals() else 0.0,
+                    "bate_cierre_pct": round(beat_pct, 1) if 'beat_pct' in locals() else 0.0,
+                    "ultima_actualizacion": datetime.now().strftime("%d/%m/%Y %H:%M")
+                }
+                
+                # Añadir mejor mercado si existe
+                if 'market_stats' in locals() and market_stats:
+                    df_m = pd.DataFrame(market_stats).T
+                    if not df_m.empty and 'Yield' in df_m.columns:
+                        best_market = df_m['Yield'].idxmax()
+                        export_data["mejor_mercado"] = str(best_market)
+                        export_data["yield_mejor_mercado"] = round(float(df_m.loc[best_market, 'Yield']), 1)
+
+                content = json.dumps(export_data, indent=4, ensure_ascii=False)
+                
+                # Crear o actualizar el archivo en GitHub
+                try:
+                    contents = repo.get_contents("datos.json")
+                    repo.update_file("datos.json", "🤖 Auto-actualización stats para Telegram", content, contents.sha)
+                except:
+                    repo.create_file("datos.json", "🤖 Creación inicial stats para Telegram", content)
+                    
+                st.success(f"✅ ¡Datos exportados correctamente a {repo_name}/datos.json!")
+                with st.expander("Ver datos exportados (JSON)"):
+                    st.json(export_data)
+                
+    except ImportError:
+        st.error("❌ Falta la librería `PyGithub`. Añádela a tu requirements.txt de Streamlit y espera a que se reinicie la app.")
+    except Exception as e:
+        st.error(f"❌ Error al exportar: {e}")
 </div>
 """, unsafe_allow_html=True)
