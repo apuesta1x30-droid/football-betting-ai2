@@ -205,14 +205,19 @@ def extract_match(ev):
         return None
 
 
+def tnorm(s):
+    n = norm(s)
+    return TEAM_ALIASES.get(n, n)
+
+
 def find_in_events(events, home, away):
-    nh, na = norm(home), norm(away)
+    nh, na = tnorm(home), tnorm(away)
     best, best_score = None, 0.0
     for ev in events:
         m = extract_match(ev)
         if not m:
             continue
-        s = sim(nh, norm(m[0])) + sim(na, norm(m[1]))
+        s = sim(nh, tnorm(m[0])) + sim(na, tnorm(m[1]))
         if s > best_score:
             best_score, best = s, m
     return best if best_score >= 1.6 else None
