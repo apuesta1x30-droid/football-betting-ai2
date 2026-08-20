@@ -329,8 +329,15 @@ def main():
             future += 1
             continue
 
-        events = get_scoreboard(slug, date_str, cache)
-        m = find_in_events(events, home, away)
+        m = None
+        for delta in (0, -1, 1):
+            d2 = d + timedelta(days=delta)
+            events = get_scoreboard(slug, d2.isoformat(), cache)
+            m = find_in_events(events, home, away)
+            if m:
+                if delta != 0:
+                    logger.info(f"📅 {partido}: encontrado con desfase de {delta:+d} día(s)")
+                break
         if not m:
             not_found += 1
             logger.info(f"⏳ {partido} ({slug} · {date_str}): sin coincidencia")
