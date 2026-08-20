@@ -223,8 +223,9 @@ def scan_value_bets():
     """Escanea mercados y detecta value bets."""
     logger.info("🚀 Iniciando escaneo automático...")
     
-    if not THE_ODDS_API_KEY:
-        logger.error("❌ THE_ODDS_API_KEY no configurada")
+    from odds_client import get_keys, odds_get
+    if not get_keys():
+        logger.error("❌ No hay claves de The Odds API configuradas")
         return 1
     
     # Cargar configuración dinámica (Capa A del auto-aprendizaje)
@@ -246,24 +247,16 @@ def scan_value_bets():
     
     team_db = load_team_database()
     
-    # Obtener fixtures de The Odds API
-    url = f"https://api.the-odds-api.com/v4/sports/soccer/odds"
-    params = {
+    # Obtener fixtures de The Odds API (con rotación de claves y contador)
+    response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
         "markets": "h2h,totals",
         "oddsFormat": "decimal",
-        "apiKey": THE_ODDS_API_KEY
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code != 200:
-            logger.error(f"❌ Error The Odds API: {response.text}")
-            return 1
-        fixtures_data = response.json()
-    except Exception as e:
-        logger.error(f"❌ Error consultando The Odds API: {e}")
+    }, tracker=tracker)
+    if response is None or response.status_code != 200:
+        logger.error("❌ Error The Odds API (todas las claves agotadas o tope mensual)")
         return 1
+    fixtures_data = response.json()
     
     logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
     
