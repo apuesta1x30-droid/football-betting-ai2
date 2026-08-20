@@ -25,14 +25,24 @@ ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/{}/scoreboard"
 
 # Mapa: patrón (liga normalizada de The Odds API) → slug ESPN
 LEAGUE_MAP = [
+    # Corea ANTES que 'league 1' de Inglaterra
+    ('k league', 'kor.1'),
+    ('south korea', 'kor.1'),
+    # Brasil ANTES que 'serie a/b' de Italia
+    ('brazil serie b', 'bra.2'),
+    ('serie b - brazil', 'bra.2'),
+    ('brazil serie a', 'bra.1'),
+    ('serie a - brazil', 'bra.1'),
+    ('brazil', 'bra.1'),
     # Inglaterra / Escocia
     ('scotland championship', 'sco.2'),
     ('england championship', 'eng.2'),
     ('championship', 'eng.2'),
     ('england league one', 'eng.3'),
+    ('league one', 'eng.3'),
     ('league 1', 'eng.3'),
     ('england league two', 'eng.4'),
-    ('league 2', 'eng.4'),
+    ('league two', 'eng.4'),
     ('england premier', 'eng.1'),
     ('premier league', 'eng.1'),
     ('premiership', 'sco.1'),
@@ -40,15 +50,15 @@ LEAGUE_MAP = [
     # España
     ('la liga 2', 'esp.2'),
     ('la liga', 'esp.1'),
-    # Alemania / Austria (Austria ANTES del genérico bundesliga)
+    # Alemania / Austria (Austria antes del genérico)
     ('austrian', 'aut.1'),
     ('austria bundesliga', 'aut.1'),
-    ('3. liga', 'ger.3'),
+    ('3 liga', 'ger.3'),
     ('bundesliga 2', 'ger.2'),
     ('2. bundesliga', 'ger.2'),
     ('germany bundesliga', 'ger.1'),
     ('bundesliga', 'ger.1'),
-    # Italia
+    # Italia (después de Brasil)
     ('serie b', 'ita.2'),
     ('serie a', 'ita.1'),
     ('coppa italia', 'ita.coppa_italia'),
@@ -69,16 +79,16 @@ LEAGUE_MAP = [
     ('veikkausliiga', 'fin.1'),
     ('ykkonen', 'fin.2'),
     ('urvalsdeild', 'ice.1'),
-    # Suiza / Bélgica
-    ('swiss', 'swi.1'),
-    ('superleague', 'swi.1'),
+    # Suiza (sui.1) / Bélgica
+    ('swiss', 'sui.1'),
+    ('superleague', 'sui.1'),
     ('belgium', 'bel.1'),
     # Resto Europa
     ('turkey', 'tur.1'),
     ('greece', 'gre.1'),
     ('russia', 'rus.1'),
-    ('ekstraklasa', 'pol.1'),
-    ('poland', 'pol.1'),
+    ('ekstraklasa', 'pol.ekstraklasa'),
+    ('poland', 'pol.ekstraklasa'),
     ('czech', 'cze.1'),
     ('croatia', 'cro.1'),
     ('estonia', 'est.1'),
@@ -91,17 +101,12 @@ LEAGUE_MAP = [
     ('saudi', 'ksa.1'),
     ('j league', 'jpn.1'),
     ('japan', 'jpn.1'),
-    ('k league', 'kor.1'),
-    ('south korea', 'kor.1'),
     ('china', 'chn.1'),
     ('australia', 'aus.1'),
     # América
-    ('leagues cup', 'usa.leagues_cup'),
     ('usa mls', 'usa.1'),
     ('mls', 'usa.1'),
     ('mexico', 'mex.1'),
-    ('brazil serie b', 'bra.2'),
-    ('brazil', 'bra.1'),
     ('argentina', 'arg.1'),
     ('chile', 'chi.1'),
     ('colombia', 'col.1'),
@@ -118,6 +123,10 @@ LEAGUE_MAP = [
     ('europa league', 'uefa.europa'),
 ]
 
+# Alias de nombres de equipo (The Odds API → ESPN)
+TEAM_ALIASES = {
+    'hearts': 'heart of midlothian',
+}
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
