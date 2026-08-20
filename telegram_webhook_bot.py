@@ -158,11 +158,14 @@ def telegram():
     
     # /scan → escaneo manual en segundo plano
     if cmd == '/scan':
-        threading.Thread(target=_run_scan_async, daemon=True).start()
-        tg('sendMessage', chat_id=CHAT_ID,
-           text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
-           parse_mode='HTML')
-        return jsonify(ok=True)
+        def do_scan():
+            # Confirmación primero (rápido), luego escaneo (pesado)
+            tg('sendMessage', chat_id=CHAT_ID,
+               text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
+               parse_mode='HTML')
+            _run_scan_async()
+        threading.Thread(target=do_scan, daemon=True).start()
+        return jsonify(ok=True)  # ← libera el worker en <1ms
     
     # /glosario → mensaje corto + botón al dashboard
     if cmd == '/glosario':
