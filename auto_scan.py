@@ -238,7 +238,7 @@ def scan_value_bets():
                 f"(gap={cfg['gap']}, n={cfg['n']})")
     logger.info(f"🚫 Ligas en lista negra ({len(blacklist)}): {sorted(blacklist)}")
     if safety_mode:
-        logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +15 → sin alertas de apuesta")
+        logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → sin alertas de apuesta")
     
     models = load_models()
     if not models:
