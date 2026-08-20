@@ -4,8 +4,8 @@ v0.5-B · Escaneo automático de value bets.
 - Modelo XGBoost para probabilidades.
 - The Odds API con rotación de 3 claves y contador mensual.
 - Lista negra empírica de ligas (n≥8, PnL≤-5 u).
-- Modo seguridad: si gap > +10, sin alertas de apuesta (solo registro).
-- Liquidación manual vía reacciones 👌/👎 en Telegram.
+- Modo seguridad: si gap > +10, se envía advertencia pero los picks se notifican
+  igual (formato VALUE BET normal) para permitir liquidación manual con 👌/👎.
 """
 import os
 import sys
@@ -182,7 +182,8 @@ def scan_value_bets():
                 f"(gap={cfg['gap']}, n={cfg['n']})")
     logger.info(f"🚫 Ligas en lista negra ({len(blacklist)}): {sorted(blacklist)}")
     if safety_mode:
-        logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → sin alertas de apuesta")
+        logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → "
+                    f"advertencia enviada, picks notificadas igual para liquidación manual")
 
     if not get_keys():
         logger.error("❌ No hay claves de The Odds API configuradas")
@@ -295,47 +296,17 @@ def scan_value_bets():
         # Tomar top 10 por EV
         top10 = sorted(value_bets, key=lambda x: x['EV (%)'], reverse=True)[:10]
 
+        # Banner de modo seguridad si está activo (los picks se envían igual)
         if safety_mode:
             send_telegram_message(
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
-                f"Los picks se registran pero NO se recomienda apostar.\n"
-                f"Puedes liquidar manualmente con 👌/👎 si lo deseas.\n"
+                f"NO apuestes dinero real hasta que el gap baje de +10.\n"
+                f"Los picks se registran para poder liquidarlos manualmente con 👌/👎.\n"
                 f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
                 f"ℹ️ Más info: /glosario")
 
-            # Picks informativos: se envían solo si aún no tienen mensaje asociado
-            todos = tracker.get_all_picks()
-            con_msg = {p.get('raw_hash') for p in todos if p.get('telegram_message_id')}
-            pend_sin_msg = {p.get('raw_hash'): p['id'] for p in todos
-                            if p.get('status') == 'pending' and not p.get('telegram_message_id')}
-            for vb in top10:
-                h = tracker.hash_pick(vb)
-                if h in con_msg:
-                    logger.info(f"⏭️ Ya comunicado: {vb['Partido']} | {vb['Mercado']}")
-                    continue
-                msg = (
-                    f"📝 <b>SOLO REGISTRO (MODO SEGURIDAD)</b>\n\n"
-                    f"🏆 <b>{vb['Liga']}</b>\n"
-                    f"⚽ {vb['Partido']}\n"
-                    f"🕐 {vb['Hora']}\n\n"
-                    f"📊 <b>{vb['Mercado']}</b>\n"
-                    f"💰 Cuota: <b>{vb['Cuota']:.2f}</b>\n"
-                    f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
-                    f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
-                    f"📈 EV: {vb['EV (%)']:+.1f}%\n\n"
-                    f"🚫 <b>NO APOSTAR</b> — modelo descalibrado\n"
-                    f"💡 Liquidable manualmente con 👌/👎"
-                )
-                msg_id = send_telegram_message(msg)
-                if msg_id:
-                    vb['Telegram Msg ID'] = msg_id
-                    if h in pend_sin_msg:
-                        tracker.client.table(tracker.table).update(
-                            {'telegram_message_id': msg_id}).eq('id', pend_sin_msg[h]).execute()
-                time.sleep(1.0)
-
-        elif top10:
+        if top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
                 if tracker.hash_pick(vb) in ya_registrados:
