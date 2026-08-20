@@ -7,6 +7,8 @@ consulta The Odds API y guarda la mejor cuota actual como closing_odds.
 CLV = (cuota_tomada / cuota_cierre - 1) * 100 → positivo = bates al mercado.
 Mercados con cierre: 1X2, Over FT y Over 1ª Parte. (BTTS/DC quedan sin CLV en v1.)
 Modo --test: calcula y loguea sin guardar (para verificar sin ensuciar datos).
+
+Ahora usa odds_client.py para rotación de claves y contador mensual.
 """
 import os
 import re
@@ -20,11 +22,11 @@ from zoneinfo import ZoneInfo
 
 from stats_tracker import StatsTracker
 from settle_picks import pick_match_dt, _norm
+from odds_client import odds_get, get_keys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-THE_ODDS_API_KEY = os.getenv('THE_ODDS_API_KEY', '')
 WINDOW_HOURS = 6.0
 META_SPORTS_KEY = 'odds_api_sports_map'
 
@@ -40,18 +42,16 @@ def get_sports_map(tracker):
                 return cached['map']
     except Exception as e:
         logger.debug(f"Caché de deportes no disponible: {e}")
-    try:
-        r = requests.get("https://api.the-odds-api.com/v4/sports/",
-                         params={"apiKey": THE_ODDS_API_KEY}, timeout=15)
-        mapping = {s['title']: s['key'] for s in r.json() if s.get('active')}
-        tracker.client.table('meta').upsert(
-            {'key': META_SPORTS_KEY,
-             'value': json.dumps({'ts': datetime.now(timezone.utc).isoformat(), 'map': mapping})},
-            on_conflict='key').execute()
-        return mapping
-    except Exception as e:
-        logger.error(f"Error listando deportes: {e}")
+    r = odds_get("sports/", tracker=tracker)
+    if r is None or r.status_code != 200:
+        logger.error(f"Error listando deportes (todas las claves agotadas)")
         return {}
+    mapping = {s['title']: s['key'] for s in r.json() if s.get('active')}
+    tracker.client.table('meta').upsert(
+        {'key': META_SPORTS_KEY,
+         'value': json.dumps({'ts': datetime.now(timezone.utc).isoformat(), 'map': mapping})},
+        on_conflict='key').execute()
+    return mapping
 
 
 def market_target(mercado, home, away):
@@ -96,8 +96,8 @@ def run(test=False):
     if not tracker.enabled:
         logger.error("❌ Supabase no configurado")
         return 1
-    if not THE_ODDS_API_KEY:
-        logger.error("❌ THE_ODDS_API_KEY no configurada")
+    if not get_keys():
+        logger.error("❌ No hay claves de The Odds API configuradas")
         return 1
 
     now = datetime.now(timezone.utc)
@@ -131,21 +131,17 @@ def run(test=False):
         if not sport_key:
             logger.warning(f"⚠️ Liga sin sport_key activo: {liga}")
             continue
-        try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds",
-                params={"apiKey": THE_ODDS_API_KEY, "regions": "eu,us",
-                        "markets": "h2h,totals", "oddsFormat": "decimal"},
-                timeout=15)
-            if r.status_code != 200:
-                logger.error(f"❌ The Odds API ({liga}): HTTP {r.status_code} · {r.text[:200]}")
-                continue
-            events = r.json()
-            if not isinstance(events, list):
-                logger.error(f"❌ Respuesta inesperada ({liga}): {str(events)[:200]}")
-                continue
-        except Exception as e:
-            logger.error(f"Error consultando odds de {liga}: {e}")
+        r = odds_get(f"sports/{sport_key}/odds", {
+            "regions": "eu,us",
+            "markets": "h2h,totals",
+            "oddsFormat": "decimal",
+        }, tracker=tracker)
+        if r is None or r.status_code != 200:
+            logger.error(f"❌ The Odds API ({liga}): claves agotadas o tope mensual")
+            continue
+        events = r.json()
+        if not isinstance(events, list):
+            logger.error(f"❌ Respuesta inesperada ({liga}): {str(events)[:200]}")
             continue
 
         for p in plist:
