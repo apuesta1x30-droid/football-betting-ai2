@@ -1,83 +1,61 @@
 #!/usr/bin/env python3
 """
-v0.5-B · Escaneo automático de value bets.
-- Modelo XGBoost para probabilidades.
-- The Odds API con rotación de 3 claves y contador mensual.
-- Lista negra empírica de ligas (n≥8, PnL≤-5 u).
-- Modo seguridad: si gap > +10, se envía advertencia pero los picks se notifican
-  igual (formato VALUE BET normal) para permitir liquidación manual con 👌/👎.
+v0.5-B · Escaneo automático de value bets con auto-ajuste dinámico.
+- Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
+- Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
+- Modo seguridad (gap > +10): envía banner de aviso PERO notifica los picks
+  en formato normal para poder liquidarlos manualmente con 👌/👎
+- Registra picks en Supabase con features del modelo y message_id de Telegram
+- Filtra por hora actual (solo partidos futuros)
+- Deduplica picks ya registrados (no re-alerta en scans posteriores)
+- Lista negra empírica de ligas (n≥8 y PnL≤-5)
+- The Odds API con rotación de claves (odds_client)
 """
 import os
 import sys
-import json
 import time
+import json
 import logging
-import pickle
-import hashlib
+import requests
+import joblib
 import pandas as pd
 import numpy as np
-import requests
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from xgboost import XGBClassifier
+from scipy.stats import poisson
 
 from stats_tracker import StatsTracker
 from odds_client import odds_get, get_keys
-from features import TEAM_DB, build_features_for_match
-from reports import compute_for
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-MARKETS = [
-    "Match Winner",
-    "Over 0.5", "Over 1.5", "Over 2.5", "Over 3.5",
-    "Under 0.5", "Under 1.5", "Under 2.5", "Under 3.5",
-    "Over 0.5 1st Half", "Over 1.5 1st Half",
-    "Under 0.5 1st Half", "Under 1.5 1st Half",
-    "Both Teams to Score",
-    "Double Chance",
-]
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-MODEL_FILE = "models/xgb_model.pkl"
-FEATURE_COLS = [
-    "implied_prob", "team_strength_home", "team_strength_away",
-    "is_home", "market_type", "point_value",
-]
-
-
-def load_models():
-    """Carga el modelo XGBoost entrenado."""
-    if not os.path.exists(MODEL_FILE):
-        logger.error(f"❌ Modelo no encontrado: {MODEL_FILE}")
-        return None
-    with open(MODEL_FILE, "rb") as f:
-        return pickle.load(f)
-
-
-def predict_proba(model, X):
-    """Devuelve probabilidades del modelo XGBoost."""
-    if model is None:
-        return np.zeros(len(X))
-    return model.predict_proba(X)[:, 1]
+EV_THRESHOLD_MIN = 2.0  # Umbral mínimo para registrar en BD (fijo)
+DEFAULT_EV_NOTIFY = 10.0  # Default si no hay auto-ajuste
+DEFAULT_KELLY = 4  # Default: Kelly 1/4
+META_KEY_AUTO_TUNE = 'auto_tune'
 
 
 def load_auto_tune_config(tracker):
-    """Lee la configuración dinámica (gap, n, ev_notify, kelly) desde Supabase."""
-    cfg = {"ev_notify": 10.0, "kelly": 4, "gap": None, "n": 0}
+    """Lee la configuración dinámica guardada por auto_tune.py."""
+    cfg = {'ev_notify': DEFAULT_EV_NOTIFY, 'kelly': DEFAULT_KELLY, 'gap': None, 'n': None}
+    if not tracker or not tracker.enabled:
+        return cfg
     try:
-        resp = tracker.client.table('meta').select('value').eq('key', 'auto_tune').execute()
+        resp = tracker.client.table('meta').select('value').eq('key', META_KEY_AUTO_TUNE).execute()
         if resp.data:
             data = json.loads(resp.data[0]['value'])
-            inner = data.get('cfg', {})
-            cfg['ev_notify'] = float(inner.get('ev_notify', 10.0))
-            cfg['kelly'] = int(inner.get('kelly', 4))
+            saved = data.get('cfg', {})
+            cfg['ev_notify'] = float(saved.get('ev_notify', DEFAULT_EV_NOTIFY))
+            cfg['kelly'] = int(saved.get('kelly', DEFAULT_KELLY))
             cfg['gap'] = data.get('gap')
-            cfg['n'] = data.get('n', 0)
+            cfg['n'] = data.get('n')
     except Exception as e:
-        logger.debug(f"No hay config auto_tune: {e}")
+        logger.debug(f"No se pudo leer auto_tune config: {e}")
     return cfg
-
 
 def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
     """Ligas con evidencia negativa suficiente (n≥min_n y PnL≤min_pnl)."""
@@ -97,6 +75,51 @@ def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
     return {lg for lg, a in agg.items() if a['n'] >= min_n and a['pnl'] <= min_pnl}
 
 
+def send_telegram_message(message, parse_mode="HTML"):
+    """Envía mensaje a Telegram y devuelve el message_id (o None si falla)."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("Telegram no configurado")
+        return None
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": parse_mode,
+        "disable_web_page_preview": True
+    }
+    
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            logger.info("✅ Notificación enviada a Telegram")
+            return response.json().get('result', {}).get('message_id')
+        else:
+            logger.error(f"❌ Error Telegram: {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"❌ Error enviando Telegram: {e}")
+        return None
+
+
+def format_value_bet_alert(vb, kelly_fraction):
+    """Formatea una value bet como mensaje de alerta para Telegram."""
+    stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'], fraction=kelly_fraction)
+    return (
+        f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
+        f"🏆 <b>{vb['Liga']}</b>\n"
+        f"⚽ {vb['Partido']}\n"
+        f"🕐 {vb['Hora']}\n\n"
+        f"📊 <b>{vb['Mercado']}</b>\n"
+        f"💰 Cuota: <b>{vb['Cuota']:.2f}</b>\n"
+        f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
+        f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
+        f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction})\n\n"
+        f"🔖 Fuente: {vb['Fuente']}"
+    )
+
+
 def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
     """Formatea el resumen del escaneo con la configuración activa."""
     config_line = f"🤖 Config activa: EV≥{cfg['ev_notify']:.0f}% · Kelly 1/{cfg['kelly']}"
@@ -104,7 +127,7 @@ def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
         config_line += f" (gap {cfg['gap']:+.1f} pp)"
     if n_blacklist:
         config_line += f" · 🚫 {n_blacklist} ligas excluidas"
-
+    
     return (
         f"📊 <b>RESUMEN DEL ESCANEO</b>\n\n"
         f"🔎 Partidos analizados: <b>{stats['total']}</b>\n"
@@ -115,63 +138,99 @@ def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
     )
 
 
-def format_value_bet_alert(vb, kelly_fraction):
-    """Formatea una alerta de value bet individual."""
-    ev = vb['EV (%)']
-    prob_ia = vb['Prob. IA']
-    cuota = vb['Cuota']
-    
-    # Kelly simple
-    kelly_pct = max(0, (prob_ia * cuota - 1) / (cuota - 1)) * 100
-    stake = kelly_pct / kelly_fraction
-    
-    return (
-        f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
-        f"🏆 <b>{vb['Liga']}</b>\n"
-        f"⚽ {vb['Partido']}\n"
-        f"🕐 {vb['Hora']}\n\n"
-        f"📊 <b>{vb['Mercado']}</b>\n"
-        f"💰 Cuota: <b>{cuota:.2f}</b>\n"
-        f"🤖 Prob. IA: <b>{prob_ia:.1%}</b>\n"
-        f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
-        f"📈 EV: <b>{ev:+.1f}%</b>\n"
-        f"💵 Stake sugerido: <b>{stake:.1f}%</b> (Kelly 1/{kelly_fraction})\n\n"
-        f"🤙 <b>Liquidar</b>: reacciona 👌 (acertada) o 👎 (fallada)"
-    )
+def calculate_kelly_stake(prob, odd, fraction=4):
+    """Calcula stake usando Kelly fraccionado (1/fraction)."""
+    if prob <= 0 or odd <= 1:
+        return 0.0
+    kelly = (prob * odd - 1) / (odd - 1)
+    return max(0.0, kelly / fraction)
 
 
-def send_telegram_message(message):
-    """Envía mensaje a Telegram y devuelve el message_id o None."""
-    bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
-    if not bot_token or not chat_id:
-        logger.error("❌ TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados")
-        return None
+def load_models():
+    """Carga los modelos XGBoost entrenados."""
+    models = {}
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True
-            },
-            timeout=10
-        )
-        if r.status_code == 200:
-            data = r.json()
-            logger.info("✅ Notificación enviada a Telegram")
-            return data.get('result', {}).get('message_id')
-        else:
-            logger.error(f"❌ Error Telegram: HTTP {r.status_code} · {r.text[:200]}")
-            return None
+        models['over15'] = joblib.load('model_over15.pkl')
+        models['over25'] = joblib.load('model_over25.pkl')
+        models['over35'] = joblib.load('model_over35.pkl')
+        models['btts'] = joblib.load('model_btts.pkl')
+        models['1x2'] = joblib.load('model_1x2.pkl')
+        logger.info("✅ Modelos cargados")
+        return models
     except Exception as e:
-        logger.error(f"❌ Error enviando a Telegram: {e}")
+        logger.error(f"❌ Error cargando modelos: {e}")
         return None
+
+
+def load_team_database():
+    """Carga la base de datos de equipos."""
+    try:
+        df_teams = pd.read_csv('team_stats_db.csv')
+        team_db = df_teams.set_index('Team').to_dict('index')
+        logger.info(f"📁 {len(team_db)} equipos en la base de datos")
+        return team_db
+    except Exception as e:
+        logger.error(f"❌ Error cargando team_stats_db.csv: {e}")
+        return {}
+
+
+def get_team_stats(team_name, team_db):
+    """Obtiene estadísticas de un equipo (o defaults si no existe)."""
+    default_stats = {
+        'Last_Form_Pts': 7,
+        'Last_Goals_Scored_Avg': 1.4,
+        'Last_Goals_Conceded_Avg': 1.4,
+        'Last_Over25_Rate': 0.50,
+        'Last_BTTS_Rate': 0.50
+    }
+    
+    if team_name in team_db:
+        stats = team_db[team_name]
+        for key, value in default_stats.items():
+            if key not in stats:
+                stats[key] = value
+        return stats
+    
+    team_lower = team_name.lower()
+    for db_team, stats in team_db.items():
+        if db_team.lower() == team_lower:
+            for key, value in default_stats.items():
+                if key not in stats:
+                    stats[key] = value
+            return stats
+    
+    return default_stats.copy()
+
+
+def calculate_double_chance_probs(models, features):
+    """Calcula probabilidades de doble oportunidad desde 1X2."""
+    probs_1x2 = models['1x2'].predict_proba(features)[0]
+    return {
+        '1X': probs_1x2[0] + probs_1x2[1],
+        'X2': probs_1x2[2] + probs_1x2[1],
+        '12': probs_1x2[0] + probs_1x2[2]
+    }
+
+
+def calculate_over05_ht_prob(prob_over25):
+    """Calcula probabilidad de Over 0.5 goles en 1ª parte."""
+    base_prob = 0.70
+    correlation_factor = prob_over25 * 0.3
+    prob_method1 = min(base_prob + correlation_factor, 0.90)
+    expected_goals_ht = 2.7 * 0.42
+    prob_method2 = 1 - poisson.pmf(0, expected_goals_ht)
+    return (prob_method1 * 0.4) + (prob_method2 * 0.6)
 
 
 def scan_value_bets():
-    """Función principal: escanea fixtures, predice, filtra y notifica."""
+    """Escanea mercados y detecta value bets."""
+    logger.info("🚀 Iniciando escaneo automático...")
+    
+    if not get_keys():
+        logger.error("❌ No hay claves de The Odds API configuradas")
+        return 1
+    
+    # Cargar configuración dinámica (Capa A del auto-aprendizaje)
     tracker = StatsTracker()
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
@@ -183,129 +242,195 @@ def scan_value_bets():
     logger.info(f"🚫 Ligas en lista negra ({len(blacklist)}): {sorted(blacklist)}")
     if safety_mode:
         logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → "
-                    f"advertencia enviada, picks notificadas igual para liquidación manual")
-
-    if not get_keys():
-        logger.error("❌ No hay claves de The Odds API configuradas")
+                    f"aviso enviado, picks notificados para liquidación manual")
+    
+    models = load_models()
+    if not models:
         return 1
-
-    # Cargar modelo
-    model = load_models()
-    if model is None:
-        return 1
-    logger.info("✅ Modelos cargados")
-
-    # Cargar base de equipos
-    if not os.path.exists(TEAM_DB):
-        logger.error(f"❌ Base de equipos no encontrada: {TEAM_DB}")
-        return 1
-    teams_df = pd.read_csv(TEAM_DB)
-    logger.info(f"📁 {len(teams_df)} equipos en la base de datos")
-
-    # Obtener fixtures de The Odds API (con rotación de claves y contador)
+    
+    team_db = load_team_database()
+    
+    # Obtener fixtures de The Odds API (con rotación de claves)
     response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
         "markets": "h2h,totals",
         "oddsFormat": "decimal",
     }, tracker=tracker)
     if response is None or response.status_code != 200:
-        logger.error("❌ Error The Odds API (todas las claves agotadas o tope mensual)")
+        logger.error("❌ Error The Odds API (claves agotadas o tope mensual)")
         return 1
     fixtures_data = response.json()
+    
     logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
-
-    # Filtrar ligas en lista negra
-    fixtures_data = [f for f in fixtures_data if f.get("sport_title") not in blacklist]
-
-    # Construir features y predecir
-    all_predictions = []
+    
+    # Analizar cada partido
+    value_bets = []
+    now = datetime.now(timezone.utc)
+    stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
+    
     for event in fixtures_data:
         league = event.get("sport_title", "Unknown")
+        if league in blacklist:
+            continue
         home_team = event["home_team"]
         away_team = event["away_team"]
-        commence_time = event.get("commence_time", "")
-
-        # Parsear hora
-        try:
-            dt = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
-            dt_madrid = dt.astimezone(ZoneInfo("Europe/Madrid"))
-            hora = dt_madrid.strftime("%d/%m %H:%M")
-        except Exception:
-            hora = "??"
-
-        # Iterar mercados
-        for bookmaker in event.get("bookmakers", [])[:1]:  # Solo primera casa
+        commence_time = event["commence_time"]
+        
+        if commence_time.endswith('Z'):
+            match_time = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
+        else:
+            match_time = datetime.fromisoformat(commence_time)
+        
+        match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
+        now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
+        
+        # Solo partidos que aún no han empezado
+        if match_time_es <= now_es:
+            continue
+        
+        stats['total'] += 1
+        
+        home_stats = get_team_stats(home_team, team_db)
+        away_stats = get_team_stats(away_team, team_db)
+        
+        form_diff = home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7)
+        goal_threat_diff = home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4)
+        combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2
+        combined_btts = (home_stats.get('Last_BTTS_Rate', 0.50) + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
+        
+        features = pd.DataFrame([{
+            'Home_Form_Pts': home_stats.get('Last_Form_Pts', 7),
+            'Away_Form_Pts': away_stats.get('Last_Form_Pts', 7),
+            'Form_Diff': form_diff,
+            'Home_Goals_Scored': home_stats.get('Last_Goals_Scored_Avg', 1.4),
+            'Away_Goals_Conceded': away_stats.get('Last_Goals_Conceded_Avg', 1.4),
+            'Goal_Threat_Diff': goal_threat_diff,
+            'Combined_Over25_Rate': combined_o25,
+            'Combined_BTTS_Rate': combined_btts
+        }])
+        
+        probs_1x2 = models['1x2'].predict_proba(features)[0]
+        prob_over25 = models['over25'].predict_proba(features)[0][1]
+        prob_btts = models['btts'].predict_proba(features)[0][1]
+        dc_probs = calculate_double_chance_probs(models, features)
+        prob_over05_ht = calculate_over05_ht_prob(prob_over25)
+        
+        # Buscar mejor cuota para cada mercado
+        best_odds = {}
+        
+        for bookmaker in event.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
-                market_name = market.get("key", "")
-                if market_name not in ["h2h", "totals"]:
-                    continue
-
+                market_key = market["key"]
                 for outcome in market.get("outcomes", []):
-                    outcome_name = outcome.get("name", "")
-                    odds = outcome.get("price", 0)
-                    point = outcome.get("point")
-
-                    # Mapear a formato legible
-                    if market_name == "h2h":
-                        if outcome_name == home_team:
-                            mercado = f"1X2 - {home_team}"
-                        elif outcome_name == away_team:
-                            mercado = f"1X2 - {away_team}"
-                        else:
-                            mercado = "1X2 - Empate"
-                    elif market_name == "totals":
-                        if outcome_name == "Over":
-                            mercado = f"Over {point} Goles"
-                        else:
-                            mercado = f"Under {point} Goles"
-                    else:
+                    odd = outcome["price"]
+                    name = outcome["name"]
+                    point = outcome.get("point", 2.5)
+                    
+                    if odd < 1.3 or odd > 3.0:
                         continue
-
-                    # Construir features
-                    X = build_features_for_match(teams_df, home_team, away_team, odds, mercado, point)
-                    if X is None:
-                        continue
-
-                    # Predecir probabilidad
-                    prob_ia = predict_proba(model, X)[0]
-                    prob_casa = 1 / odds if odds > 0 else 0
-                    ev = (prob_ia * odds - 1) * 100 if odds > 0 else 0
-
-                    all_predictions.append({
-                        "Liga": league,
-                        "Partido": f"{home_team} vs {away_team}",
-                        "Hora": hora,
-                        "Mercado": mercado,
-                        "Cuota": odds,
-                        "Prob. IA": prob_ia,
-                        "Prob. Casa": prob_casa,
-                        "EV (%)": ev,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
-
-    # Estadísticas
-    stats = {"total": len(all_predictions)}
-
-    # Filtrar por EV mínimo
-    value_bets = [p for p in all_predictions if p['EV (%)'] >= ev_notify]
-    logger.info(f"📊 {len(value_bets)} value bets con EV≥{ev_notify:.0f}%")
-
+                    
+                    key = None
+                    if market_key == "h2h":
+                        if name == home_team:
+                            key = f"1X2_{home_team}"
+                        elif name == "Draw":
+                            key = "1X2_Draw"
+                        elif name == away_team:
+                            key = f"1X2_{away_team}"
+                    elif market_key == "totals" and name == "Over":
+                        if point in [1.5, 2.5, 3.5]:
+                            key = f"Over_{point}"
+                    
+                    if key is not None:
+                        if key not in best_odds or odd > best_odds[key]:
+                            best_odds[key] = odd
+        
+        # Analizar cada mercado con cuota disponible
+        for market_key, odd in best_odds.items():
+            prob = None
+            mercado_name = None
+            is_calculated = '_CALC' in market_key
+            
+            if market_key.startswith("1X2_"):
+                team_part = market_key.split("_")[1]
+                if team_part == home_team:
+                    prob, mercado_name = probs_1x2[0], f"1X2 - {home_team}"
+                elif team_part == "Draw":
+                    prob, mercado_name = probs_1x2[1], "1X2 - Empate"
+                elif team_part == away_team:
+                    prob, mercado_name = probs_1x2[2], f"1X2 - {away_team}"
+            elif market_key.startswith("Over_"):
+                point = float(market_key.split("_")[1])
+                if point == 1.5:
+                    prob = models['over15'].predict_proba(features)[0][1]
+                    mercado_name = "Over 1.5 Goles"
+                elif point == 2.5:
+                    prob = models['over25'].predict_proba(features)[0][1]
+                    mercado_name = "Over 2.5 Goles"
+                elif point == 3.5:
+                    prob = models['over35'].predict_proba(features)[0][1]
+                    mercado_name = "Over 3.5 Goles"
+            elif market_key.startswith("DC_"):
+                dc_type = market_key.replace("DC_", "").replace("_CALC", "")
+                if dc_type == "1X":
+                    prob = dc_probs['1X']
+                    mercado_name = "Doble Oportunidad - 1X"
+                elif dc_type == "X2":
+                    prob = dc_probs['X2']
+                    mercado_name = "Doble Oportunidad - X2"
+                elif dc_type == "12":
+                    prob = dc_probs['12']
+                    mercado_name = "Doble Oportunidad - 12"
+            elif market_key.startswith("HT_Over_0.5"):
+                prob = prob_over05_ht
+                mercado_name = "Over 0.5 Goles 1ª Parte"
+            elif market_key.startswith("BTTS_"):
+                btts_type = market_key.split("_")[1]
+                if btts_type == "Yes":
+                    prob, mercado_name = prob_btts, "BTTS - Sí (Ambos marcan)"
+                elif btts_type == "No":
+                    prob, mercado_name = 1 - prob_btts, "BTTS - No"
+            
+            if prob is None:
+                continue
+            
+            ev = (prob * odd) - 1
+            ev_percentage = ev * 100
+            
+            if ev_percentage > EV_THRESHOLD_MIN:
+                value_bets.append({
+                    "Liga": league,
+                    "Partido": f"{home_team} vs {away_team}",
+                    "Hora": match_time_es.strftime('%d/%m %H:%M'),
+                    "Mercado": mercado_name,
+                    "Cuota": odd,
+                    "Prob. IA": prob,
+                    "Prob. Casa": 1/odd,
+                    "EV (%)": ev_percentage,
+                    "Fuente": "Cálculo" if is_calculated else "API-Football",
+                    "Features": features.iloc[0].to_dict()
+                })
+    
+    # Enviar resumen y alertas
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
-
-        # Tomar top 10 por EV
-        top10 = sorted(value_bets, key=lambda x: x['EV (%)'], reverse=True)[:10]
-
-        # Banner de modo seguridad si está activo (los picks se envían igual)
+        
+        # Top 10 con el umbral DINÁMICO (ev_notify)
+        top10 = sorted(
+            [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
+            key=lambda x: -x['EV (%)']
+        )[:10]
+        
+        # Banner de modo seguridad (los picks se envían igual debajo)
         if safety_mode:
             send_telegram_message(
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
-                f"NO apuestes dinero real hasta que el gap baje de +10.\n"
-                f"Los picks se registran para poder liquidarlos manualmente con 👌/👎.\n"
+                f"NO apuestes dinero real: picks enviados solo para registro.\n"
+                f"Puedes liquidarlos manualmente con 👌/.\n"
                 f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
                 f"ℹ️ Más info: /glosario")
-
+        
         if top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
@@ -315,7 +440,7 @@ def scan_value_bets():
                 msg_id = send_telegram_message(format_value_bet_alert(vb, kelly_fraction))
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
-                time.sleep(1.0)
+                time.sleep(0.5)
         else:
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n\n"
@@ -324,32 +449,16 @@ def scan_value_bets():
                 f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
                 f"💡 Mercado eficiente en las próximas horas."
             )
-
-        # Registrar TODAS las value bets en BD (con o sin alerta)
+        
+        # Registro en BD después del envío
+        registered_count = 0
         for vb in value_bets:
-            pick = {
-                "liga": vb["Liga"],
-                "partido": vb["Partido"],
-                "hora": vb["Hora"],
-                "mercado": vb["Mercado"],
-                "cuota": vb["Cuota"],
-                "prob_ia": vb["Prob. IA"],
-                "prob_casa": vb["Prob. Casa"],
-                "ev_percentage": vb["EV (%)"],
-                "timestamp": vb["timestamp"],
-                "status": "pending",
-                "telegram_message_id": vb.get("Telegram Msg ID"),
-            }
-            tracker.register_pick(pick)
-        logger.info(f"💾 {len(value_bets)} picks registrados en base de datos")
+            if tracker.register_pick(vb):
+                registered_count += 1
+        logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
-        send_telegram_message(
-            f"💤 <b>Sin value bets</b>\n\n"
-            f"📊 {stats['total']} partidos analizados, ninguno con EV ≥ {ev_notify:.0f}%.\n"
-            f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
-            f"📡 Datos de The Odds API"
-        )
-
+        send_telegram_message("💤 <b>Escaneo completado</b>\n\nSin Value Bets detectadas en las próximas horas.")
+    
     return 0
 
 
