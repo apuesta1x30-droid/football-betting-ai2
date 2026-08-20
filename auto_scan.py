@@ -418,23 +418,25 @@ def scan_value_bets():
             key=lambda x: -x['EV (%)']
         )[:10]
         
-        if safety_mode:
-            # Enviar banner de modo seguridad
+            if safety_mode:
             send_telegram_message(
                 f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
                 f"Los picks se registran pero NO se recomienda apostar.\n"
-                f"Puedes liquidar manualmente con 👌/👎 si lo deseas.\n"
+                f"Puedes liquidar manualmente con 👌/ si lo deseas.\n"
                 f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
                 f"ℹ️ Más info: /glosario")
             
-            # Enviar picks como informativos (sin Kelly, sin recomendación)
-            ya_registrados = tracker.get_registered_hashes()
+            # Picks informativos: se envían solo si aún no tienen mensaje asociado
+            todos = tracker.get_all_picks()
+            con_msg = {p.get('raw_hash') for p in todos if p.get('telegram_message_id')}
+            pend_sin_msg = {p.get('raw_hash'): p['id'] for p in todos
+                            if p.get('status') == 'pending' and not p.get('telegram_message_id')}
             for vb in top10:
-                if tracker.hash_pick(vb) in ya_registrados:
-                    logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
+                h = tracker.hash_pick(vb)
+                if h in con_msg:
+                    logger.info(f"⏭️ Ya comunicado: {vb['Partido']} | {vb['Mercado']}")
                     continue
-                # Formato informativo (sin stake)
                 msg = (
                     f"📝 <b>SOLO REGISTRO (MODO SEGURIDAD)</b>\n\n"
                     f"🏆 <b>{vb['Liga']}</b>\n"
@@ -451,7 +453,10 @@ def scan_value_bets():
                 msg_id = send_telegram_message(msg)
                 if msg_id:
                     vb['Telegram Msg ID'] = msg_id
-                time.sleep(0.5)
+                    if h in pend_sin_msg:
+                        tracker.client.table(tracker.table).update(
+                            {'telegram_message_id': msg_id}).eq('id', pend_sin_msg[h]).execute()
+                time.sleep(1.0)
         elif top10:
             ya_registrados = tracker.get_registered_hashes()
             for vb in top10:
