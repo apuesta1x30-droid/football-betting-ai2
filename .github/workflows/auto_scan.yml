@@ -27,6 +27,8 @@ jobs:
     - name: Run auto scan
       env:
         THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        THE_ODDS_API_KEY_2: ${{ secrets.THE_ODDS_API_KEY_2 }}
+        THE_ODDS_API_KEY_3: ${{ secrets.THE_ODDS_API_KEY_3 }}
         API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
