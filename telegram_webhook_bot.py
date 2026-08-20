@@ -159,12 +159,9 @@ def telegram():
     # /scan → escaneo manual en segundo plano
     if cmd == '/scan':
         threading.Thread(target=_run_scan_async, daemon=True).start()
-        # Enviar confirmación en thread separado para evitar timeout
-        def send_confirmation():
-            tg('sendMessage', chat_id=CHAT_ID,
-               text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
-               parse_mode='HTML')
-        threading.Thread(target=send_confirmation, daemon=True).start()
+        tg('sendMessage', chat_id=CHAT_ID,
+           text="🔄 <b>Escaneo manual iniciado</b>\n\nTe envío el resumen y las mejores apuestas en ~1 minuto.",
+           parse_mode='HTML')
         return jsonify(ok=True)
     
     # /glosario → mensaje corto + botón al dashboard
