@@ -146,7 +146,15 @@ if _glosario:
 # ==========================================
 # CONFIGURACIÓN
 # ==========================================
-THE_ODDS_API_KEY = st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", ""))
+# Recopilamos hasta 3 API keys de The Odds API para rotación automática
+THE_ODDS_API_KEYS = [
+    st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", "")),
+    st.secrets.get("THE_ODDS_API_KEY_2", os.getenv("THE_ODDS_API_KEY_2", "")),
+    st.secrets.get("THE_ODDS_API_KEY_3", os.getenv("THE_ODDS_API_KEY_3", ""))
+]
+# Filtramos para quedarnos solo con las que tengan valor (no estén vacías)
+THE_ODDS_API_KEYS = [key for key in THE_ODDS_API_KEYS if key]
+
 API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", ""))
 API_FOOTBALL_HEADERS = {'x-rapidapi-key': API_FOOTBALL_KEY, 'x-rapidapi-host': "v3.football.api-sports.io"}
 
@@ -180,18 +188,46 @@ def load_team_database():
 # ==========================================
 @st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
 def scan_all_markets():
-    url = f"https://api.the-odds-api.com/v4/sports/soccer/odds"
-    params = {
-        "regions": "eu,us",
-        "markets": "h2h,totals",
-        "oddsFormat": "decimal",
-        "apiKey": THE_ODDS_API_KEY
-    }
-    response = requests.get(url, params=params, timeout=15)
-    if response.status_code != 200:
-        st.error(f"Error en The Odds API: {response.text}")
+    if not THE_ODDS_API_KEYS:
+        st.error("❌ No hay API keys de The Odds API configuradas en los Secrets de Streamlit.")
         return []
-    return response.json()
+    
+    # Intentar con cada key hasta que una funcione
+    for i, api_key in enumerate(THE_ODDS_API_KEYS):
+        url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
+        params = {
+            "regions": "eu,us",
+            "markets": "h2h,totals",
+            "oddsFormat": "decimal",
+            "apiKey": api_key
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            
+            # Si la respuesta es exitosa, devolver los datos inmediatamente
+            if response.status_code == 200:
+                return response.json()
+            
+            # Detectar agotamiento de créditos (código 429 o mensaje de error específico)
+            if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text or "usage" in response.text.lower():
+                st.warning(f"⚠️ API Key #{i+1} agotada. Probando con la siguiente...")
+                continue
+            
+            # Otros errores de la API
+            st.error(f"Error en The Odds API (Key #{i+1}): {response.status_code} - {response.text}")
+            continue
+            
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ Error de conexión con Key #{i+1}: {e}. Probando la siguiente...")
+            continue
+        except Exception as e:
+            st.warning(f"⚠️ Error inesperado con Key #{i+1}: {e}. Probando la siguiente...")
+            continue
+            
+    # Si el bucle termina, significa que todas fallaron
+    st.error("❌ Todas las API keys de The Odds API están agotadas o han fallado. Revisa tus límites o añade más keys.")
+    return []
 
 def get_fixture_id_from_api_football(home_team, away_team, match_date):
     try:
@@ -543,9 +579,11 @@ st.sidebar.markdown("- ✅ BTTS (Ambos marcan)")
 st.sidebar.markdown("- ✅ Doble Oportunidad (1X, X2, 12)")
 st.sidebar.markdown("- ✅ Over 0.5 1ª Parte")
 
-st.sidebar.markdown("### 🔒 Filtros activos:")
-st.sidebar.markdown(f"- ✅ Cuotas entre **{min_odd}** y **{max_odd}**")
-st.sidebar.markdown(f"- ✅ {'Solo hoy' if only_today else 'Próximos 3 días'}")
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔑 Estado de API Keys")
+st.sidebar.info(f"Keys configuradas y activas: {len(THE_ODDS_API_KEYS)}/3")
+if len(THE_ODDS_API_KEYS) == 0:
+    st.sidebar.error("⚠️ ¡Añade THE_ODDS_API_KEY_1 en los Secrets!")
 
 models = load_all_models()
 team_db = load_team_database()
