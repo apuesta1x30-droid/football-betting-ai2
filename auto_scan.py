@@ -73,6 +73,30 @@ def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
             a['pnl'] -= 1.0
     return {lg for lg, a in agg.items() if a['n'] >= min_n and a['pnl'] <= min_pnl}
 
+def compute_recalib(tracker, min_n=50):
+    """Capa B: recalibración empírica (mínimos cuadrados) de la Prob. IA.
+    Devuelve {'alpha', 'beta', 'n'} o None si hay pocos liquidados."""
+    if not tracker or not tracker.enabled:
+        return None
+    xs, ys = [], []
+    for p in tracker.get_all_picks():
+        if p.get('status') in ('won', 'lost') and p.get('prob_ia') is not None:
+            try:
+                xs.append(float(p['prob_ia']))
+                ys.append(1.0 if p['status'] == 'won' else 0.0)
+            except Exception:
+                continue
+    n = len(xs)
+    if n < min_n:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 1e-9:
+        return None
+    beta = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    alpha = my - beta * mx
+    return {'alpha': alpha, 'beta': beta, 'n': n}
 
 def send_telegram_message(message, parse_mode="HTML"):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -238,6 +262,13 @@ def scan_value_bets():
     
     team_db = load_team_database()
     
+    # Capa B: recalibración empírica de probabilidades
+    recalib = compute_recalib(tracker)
+    if recalib:
+        logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + {recalib['beta']:.2f}·p (n={recalib['n']})")
+    else:
+        logger.info("🧮 Capa B inactiva (n<50 liquidados)")
+    
     response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
         "markets": "h2h,totals",
@@ -376,6 +407,10 @@ def scan_value_bets():
             
             if prob is None:
                 continue
+            
+            # Capa B: corregir la probabilidad antes de calcular el EV
+            if recalib:
+                prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
             
             ev = (prob * odd) - 1
             ev_percentage = ev * 100
