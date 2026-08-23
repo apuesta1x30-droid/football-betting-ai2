@@ -66,11 +66,11 @@ def interpret_stats(stats):
     """Genera una interpretación textual del rendimiento."""
     lines = []
     
-    # 1. Lectura del estado general
-    hit = stats.get('hit_rate', 0)
+    # Lectura correcta de claves (coinciden con compute_for)
+    hit = stats.get('hit', 0)
     pnl = stats.get('pnl', 0)
-    yield_val = stats.get('yield', 0)
-    gap = stats.get('calibration_gap')
+    yield_val = stats.get('yield_pct', 0)
+    gap = stats.get('gap')
     clv = stats.get('avg_clv')
     brier = stats.get('brier')
     settled = stats.get('settled', 0)
@@ -140,7 +140,7 @@ def interpret_stats(stats):
             lines.append("💡 <b>Qué hacer ahora</b>: seguir acumulando muestra antes de juzgar.")
     
     return "\n".join(lines)
-
+    
 def fmt_stats(s, title):
     L = [f"📊 <b>{title}</b>", ""]
     L.append(f"🔎 Picks: <b>{s['total']}</b>  (✅ {s['wins']} · ❌ {s['losses']} · ⏳ {s['pending']})")
