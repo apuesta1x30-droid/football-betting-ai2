@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 """
-Fase 1 · Construcción/ampliación de team_stats_db.csv desde football-data.co.uk
+Fase 1 + Fase 2 · Construcción/ampliación de team_stats_db.csv
+- football-data.co.uk (Europa)
+- ESPN (Sudamérica, MLS, Liga MX)
 
-- Descarga CSVs públicos de football-data.co.uk.
-- Usa temporada actual + temporada anterior.
-- Calcula las 5 métricas que consume el modelo actual:
-    Team
-    Last_Form_Pts
-    Last_Goals_Scored_Avg
-    Last_Goals_Conceded_Avg
-    Last_Over25_Rate
-    Last_BTTS_Rate
+Calcula las 5 métricas que consume el modelo:
+    Team, Last_Form_Pts, Last_Goals_Scored_Avg, Last_Goals_Conceded_Avg,
+    Last_Over25_Rate, Last_BTTS_Rate
 
-- Fusiona con team_stats_db.csv existente:
-    * Si un equipo ya existe, actualiza sus métricas.
-    * Si no existe, lo añade.
-    * Si un equipo antiguo no aparece en football-data, lo conserva.
+Fusiona con team_stats_db.csv existente (actualiza + añade + conserva).
 """
 
 import io
@@ -34,53 +27,43 @@ logger = logging.getLogger("build_team_db")
 
 
 OUTPUT_FILE = "team_stats_db.csv"
-WINDOW = 5  # Importante: mantiene escala compatible con Last_Form_Pts actual, default 7 sobre últimos 5 partidos
+WINDOW = 5
 
 # Ligas football-data.co.uk
-# https://www.football-data.co.uk/data.php
 LEAGUE_CODES = {
-    # Inglaterra
     "E0": "England Premier League",
     "E1": "England Championship",
     "E2": "England League One",
     "E3": "England League Two",
-
-    # España
     "SP1": "Spain La Liga",
     "SP2": "Spain Segunda",
-
-    # Italia
     "I1": "Italy Serie A",
     "I2": "Italy Serie B",
-
-    # Alemania
     "D1": "Germany Bundesliga",
     "D2": "Germany Bundesliga 2",
-
-    # Francia
     "F1": "France Ligue 1",
     "F2": "France Ligue 2",
-
-    # Países Bajos
     "N1": "Netherlands Eredivisie",
-
-    # Portugal
     "P1": "Portugal Primeira Liga",
-
-    # Bélgica
     "B1": "Belgium First Division A",
-
-    # Turquía
     "T1": "Turkey Super Lig",
-
-    # Grecia
     "G1": "Greece Super League",
-
-    # Escocia
     "SC0": "Scotland Premiership",
     "SC1": "Scotland Championship",
 }
 
+# Ligas ESPN
+ESPN_LEAGUES = {
+    "bra.1": "Brazil Serie A",
+    "bra.2": "Brazil Serie B",
+    "arg.1": "Argentina Liga Profesional",
+    "chi.1": "Chile Primera Division",
+    "col.1": "Colombia Primera A",
+    "ecu.1": "Ecuador Serie A",
+    "uru.1": "Uruguay Primera Division",
+    "mex.1": "Mexico Liga MX",
+    "usa.1": "USA MLS",
+}
 
 REQUIRED_COLS = [
     "Team",
@@ -93,11 +76,6 @@ REQUIRED_COLS = [
 
 
 def current_and_previous_seasons():
-    """
-    football-data usa formato tipo:
-    2526 = temporada 2025/26
-    2627 = temporada 2026/27
-    """
     now = datetime.utcnow()
     year = now.year
     month = now.month
@@ -116,10 +94,6 @@ def current_and_previous_seasons():
 
 
 def norm_team(name):
-    """
-    Normalización básica para detectar duplicados.
-    No se usa directamente por auto_scan; solo para fusionar filas.
-    """
     if not name:
         return ""
 
@@ -127,13 +101,12 @@ def norm_team(name):
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower().strip()
 
-    # Quitar puntuación común
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
 
-    # Quitar sufijos frecuentes
     stop = {
         "fc", "cf", "afc", "sc", "cd", "sd", "ud", "ac", "as",
-        "calcio", "club", "football", "futbol", "de", "the"
+        "calcio", "club", "football", "futbol", "de", "the",
+        "atletico", "atletico", "deportivo", "real", "santos"
     }
     parts = [p for p in s.split() if p not in stop]
     return " ".join(parts).strip()
@@ -154,7 +127,7 @@ def download_league_csv(season, code):
 
         required = {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}
         if not required.issubset(df.columns):
-            logger.warning(f"⚠️ Columnas incompletas en {season}/{code}: {list(df.columns)[:10]}")
+            logger.warning(f"⚠️ Columnas incompletas en {season}/{code}")
             return None
 
         df = df[["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]].copy()
@@ -170,7 +143,6 @@ def download_league_csv(season, code):
 
 
 def parse_dates(df):
-    # football-data suele usar dd/mm/yy o dd/mm/yyyy
     df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
     df = df.dropna(subset=["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
     df["FTHG"] = pd.to_numeric(df["FTHG"], errors="coerce")
@@ -247,6 +219,164 @@ def compute_team_stats(match_rows):
     return df[REQUIRED_COLS].sort_values("Team").reset_index(drop=True)
 
 
+# ========================================
+# FASE 2: ESPN
+# ========================================
+
+def get_espn_teams(league_code):
+    """Obtiene lista de equipos de una liga ESPN."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams"
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            logger.warning(f"⚠️ ESPN {league_code}: HTTP {r.status_code}")
+            return []
+        
+        data = r.json()
+        teams = []
+        for entry in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+            team_data = entry.get("team", {})
+            team_id = team_data.get("id")
+            team_name = team_data.get("displayName") or team_data.get("name")
+            if team_id and team_name:
+                teams.append({
+                    "id": team_id,
+                    "name": team_name,
+                    "league": league_code
+                })
+        
+        logger.info(f"✅ ESPN {league_code}: {len(teams)} equipos encontrados")
+        return teams
+    
+    except Exception as e:
+        logger.warning(f"⚠️ ESPN {league_code} error: {e}")
+        return []
+
+
+def get_espn_team_schedule(league_code, team_id, team_name):
+    """Obtiene resultados recientes de un equipo ESPN."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams/{team_id}/schedule"
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return None
+        
+        data = r.json()
+        events = data.get("events", [])
+        
+        match_rows = []
+        for event in events:
+            # Solo partidos completados
+            status = event.get("status", {}).get("type", {}).get("name", "")
+            if status not in ["STATUS_FINAL", "STATUS_FULL_TIME"]:
+                continue
+            
+            # Parsear fecha
+            date_str = event.get("date", "")
+            try:
+                date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            except:
+                continue
+            
+            # Buscar equipo local/visitante
+            competitions = event.get("competitions", [])
+            if not competitions:
+                continue
+            
+            comp = competitions[0]
+            competitors = comp.get("competitors", [])
+            
+            home_team = None
+            away_team = None
+            home_score = None
+            away_score = None
+            
+            for competitor in competitors:
+                team_data = competitor.get("team", {})
+                comp_team_id = team_data.get("id")
+                comp_team_name = team_data.get("displayName") or team_data.get("name")
+                
+                score = competitor.get("score")
+                if score is not None:
+                    try:
+                        score = int(score)
+                    except:
+                        continue
+                
+                if competitor.get("homeAway") == "home":
+                    home_team = comp_team_name
+                    home_score = score
+                else:
+                    away_team = comp_team_name
+                    away_score = score
+            
+            if home_team is None or away_team is None or home_score is None or away_score is None:
+                continue
+            
+            # Determinar si nuestro equipo es local o visitante
+            is_home = (str(team_id) == str(competitors[0].get("team", {}).get("id")) 
+                      if competitors[0].get("homeAway") == "home" 
+                      else str(team_id) == str(competitors[1].get("team", {}).get("id")))
+            
+            if is_home:
+                gf, ga = home_score, away_score
+            else:
+                gf, ga = away_score, home_score
+            
+            total_goals = gf + ga
+            over25 = 1 if total_goals > 2.5 else 0
+            btts = 1 if gf > 0 and ga > 0 else 0
+            
+            if gf > ga:
+                pts = 3
+            elif gf < ga:
+                pts = 0
+            else:
+                pts = 1
+            
+            match_rows.append({
+                "Date": date,
+                "Team": team_name,
+                "GF": gf,
+                "GA": ga,
+                "Pts": pts,
+                "Over25": over25,
+                "BTTS": btts,
+            })
+        
+        return match_rows
+    
+    except Exception as e:
+        logger.debug(f"ESPN {team_name} ({team_id}) error: {e}")
+        return None
+
+
+def download_espn_data():
+    """Descarga datos de todas las ligas ESPN."""
+    all_match_rows = []
+    
+    for league_code, league_name in ESPN_LEAGUES.items():
+        teams = get_espn_teams(league_code)
+        
+        for team_info in teams:
+            team_id = team_info["id"]
+            team_name = team_info["name"]
+            
+            match_rows = get_espn_team_schedule(league_code, team_id, team_name)
+            if match_rows:
+                all_match_rows.extend(match_rows)
+        
+        logger.info(f"✅ ESPN {league_name}: datos descargados")
+    
+    if not all_match_rows:
+        logger.warning("⚠️ No se descargaron datos de ESPN")
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(all_match_rows)
+    logger.info(f"⚽ ESPN: {len(df)} partidos válidos descargados")
+    return df
+
+
 def load_existing_db():
     if not os.path.exists(OUTPUT_FILE):
         logger.info("No existe team_stats_db.csv previo. Se creará uno nuevo.")
@@ -269,12 +399,6 @@ def load_existing_db():
 
 
 def merge_existing_with_new(existing, new):
-    """
-    Fusiona por nombre normalizado.
-    - Si existe en ambos: mantiene el nombre antiguo pero actualiza métricas.
-    - Si solo existe en antiguo: conserva.
-    - Si solo existe en nuevo: añade.
-    """
     existing = existing.copy()
     new = new.copy()
 
@@ -286,13 +410,12 @@ def merge_existing_with_new(existing, new):
     merged_rows = []
     seen_norms = set()
 
-    # Actualizar existentes si hay equivalente nuevo
     for _, old in existing.iterrows():
         n = old["_norm"]
         if n in new_by_norm:
             nr = new_by_norm[n]
             merged_rows.append({
-                "Team": old["Team"],  # mantener naming que ya funcionaba en tu bot
+                "Team": old["Team"],
                 "Last_Form_Pts": nr["Last_Form_Pts"],
                 "Last_Goals_Scored_Avg": nr["Last_Goals_Scored_Avg"],
                 "Last_Goals_Conceded_Avg": nr["Last_Goals_Conceded_Avg"],
@@ -311,7 +434,6 @@ def merge_existing_with_new(existing, new):
             })
             seen_norms.add(n)
 
-    # Añadir nuevos
     added = 0
     for _, nr in new.iterrows():
         n = nr["_norm"]
@@ -339,8 +461,9 @@ def merge_existing_with_new(existing, new):
 
 
 def main():
+    # FASE 1: football-data
     seasons = current_and_previous_seasons()
-    logger.info(f"Temporadas usadas: {seasons}")
+    logger.info(f"🌍 FASE 1: football-data.co.uk (temporadas {seasons})")
 
     dfs = []
     for season in seasons:
@@ -350,21 +473,35 @@ def main():
                 logger.info(f"✅ {season}/{code} {league_name}: {len(df)} partidos")
                 dfs.append(df)
 
-    if not dfs:
-        raise RuntimeError("No se descargó ningún CSV de football-data.co.uk")
+    if dfs:
+        results = pd.concat(dfs, ignore_index=True)
+        results = parse_dates(results)
+        logger.info(f"⚽ football-data: {len(results)} partidos válidos")
+        fd_match_rows = build_match_rows(results)
+        fd_stats = compute_team_stats(fd_match_rows)
+        logger.info(f"🧮 football-data: {len(fd_stats)} equipos calculados")
+    else:
+        logger.warning("⚠️ No se descargó ningún CSV de football-data")
+        fd_stats = pd.DataFrame(columns=REQUIRED_COLS)
 
-    results = pd.concat(dfs, ignore_index=True)
-    results = parse_dates(results)
+    # FASE 2: ESPN
+    logger.info(f"🌎 FASE 2: ESPN (Sudamérica + MLS + Liga MX)")
+    espn_match_rows = download_espn_data()
+    
+    if not espn_match_rows.empty:
+        espn_stats = compute_team_stats(espn_match_rows)
+        logger.info(f"🧮 ESPN: {len(espn_stats)} equipos calculados")
+        
+        # Combinar stats de ambas fuentes
+        combined_stats = pd.concat([fd_stats, espn_stats], ignore_index=True)
+        combined_stats = combined_stats.drop_duplicates(subset=["Team"], keep="last")
+        logger.info(f"🧮 Combinado: {len(combined_stats)} equipos únicos")
+    else:
+        combined_stats = fd_stats
 
-    logger.info(f"⚽ Partidos válidos descargados: {len(results)}")
-
-    match_rows = build_match_rows(results)
-    new_stats = compute_team_stats(match_rows)
-
-    logger.info(f"🧮 Equipos calculados desde football-data: {len(new_stats)}")
-
+    # Fusionar con DB existente
     existing = load_existing_db()
-    merged = merge_existing_with_new(existing, new_stats)
+    merged = merge_existing_with_new(existing, combined_stats)
 
     merged.to_csv(OUTPUT_FILE, index=False)
     logger.info(f"✅ Guardado {OUTPUT_FILE}")
