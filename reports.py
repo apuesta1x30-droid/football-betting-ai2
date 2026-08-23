@@ -62,6 +62,84 @@ def market_pnl(picks):
         agg[m] = agg.get(m, 0.0) + (((p['cuota'] or 0) - 1) if p['status'] == 'won' else -1)
     return agg
 
+def interpret_stats(stats):
+    """Genera una interpretación textual del rendimiento."""
+    lines = []
+    
+    # 1. Lectura del estado general
+    hit = stats.get('hit_rate', 0)
+    pnl = stats.get('pnl', 0)
+    yield_val = stats.get('yield', 0)
+    gap = stats.get('calibration_gap')
+    clv = stats.get('avg_clv')
+    brier = stats.get('brier')
+    settled = stats.get('settled', 0)
+    
+    # Hit rate vs equilibrio (asumiendo cuota media ~2.0)
+    if hit < 40:
+        lines.append("🔻 <b>Hit rate bajo</b> para la cuota media del sistema (≈2.0). "
+                     "Necesitarías acertar ≥50% para estar en equilibrio.")
+    elif hit < 50:
+        lines.append("⚠️ Hit rate justo en el límite de equilibrio. "
+                     "Cualquier racha negativa te pone en rojo.")
+    else:
+        lines.append("✅ Hit rate sano, por encima del punto de equilibrio.")
+    
+    # PnL/Yield
+    if yield_val < -10:
+        lines.append(f"📉 <b>Pérdidas sostenidas</b>: {pnl:+.1f} u ({yield_val:+.1f}% yield). "
+                     "El sistema está por debajo del punto de equilibrio.")
+    elif yield_val < 0:
+        lines.append(f"⚠️ Pérdidas moderadas: {pnl:+.1f} u. Vigilar si persiste.")
+    else:
+        lines.append(f"✅ Beneficio real: {pnl:+.1f} u ({yield_val:+.1f}% yield).")
+    
+    # Gap de calibración (la pieza clave)
+    if gap is not None:
+        if gap > 10:
+            lines.append(f"🚨 <b>Gap +{gap:.0f} pp</b>: el modelo sobreestima sistemáticamente. "
+                         "Modo seguridad activo y Capa B corrigiendo probabilidades.")
+        elif gap > 5:
+            lines.append(f"⚠️ Gap +{gap:.0f} pp: ligera sobreestimación. "
+                         "Auto-ajuste exigiendo más EV.")
+        elif gap < -5:
+            lines.append(f"✅ Gap {gap:+.0f} pp: modelo conservador, rinde más de lo que anuncia.")
+        else:
+            lines.append(f"✅ Gap {gap:+.0f} pp: modelo bien calibrado.")
+    
+    # CLV (validación del mercado)
+    if clv is not None and settled >= 20:
+        if clv < -3:
+            lines.append("🔻 CLV negativo: el mercado no valida tus señales. "
+                         "Posible ruido del modelo.")
+        elif clv > 0:
+            lines.append("✅ CLV positivo: bates al cierre. Señal de edge real.")
+        else:
+            lines.append("⚠️ CLV cercano a 0: ni bates ni pierdes al cierre.")
+    
+    # Brier
+    if brier is not None:
+        if brier > 0.25:
+            lines.append("📊 Predicciones de baja calidad (Brier alto).")
+        elif brier > 0.20:
+            lines.append("📊 Predicciones aceptables, margen de mejora.")
+        else:
+            lines.append("📊 Buen poder predictivo del modelo.")
+    
+    # Recomendación final
+    if settled >= 50:
+        if gap is not None and gap > 10:
+            lines.append("💡 <b>Qué hacer ahora</b>: confiar en el modo seguridad. "
+                         "No apuestes hasta que el gap baje de +10 (semanas).")
+        elif yield_val < -5 and (clv is None or clv < 0):
+            lines.append("💡 <b>Qué hacer ahora</b>: sistema en revisión. "
+                         "Pausar apuestas reales hasta ver mejora.")
+        elif yield_val > 0 and (clv is None or clv > 0):
+            lines.append("💡 <b>Qué hacer ahora</b>: sistema validado. Mantener el rumbo.")
+        else:
+            lines.append("💡 <b>Qué hacer ahora</b>: seguir acumulando muestra antes de juzgar.")
+    
+    return "\n".join(lines)
 
 def fmt_stats(s, title):
     L = [f"📊 <b>{title}</b>", ""]
@@ -78,6 +156,9 @@ def fmt_stats(s, title):
     if s.get('avg_clv') is not None:
         L.append(f"🔻 CLV medio: <b>{s['avg_clv']:+.1f}%</b> ({s['clv_n']} picks) "
                  f"· bate al cierre: <b>{s['beat_close']:.0f}%</b>")
+    lines.append("")
+    lines.append("🧠 <b>Interpretación</b>")
+    lines.append(interpret_stats(stats))
     return "\n".join(L)
 
 
