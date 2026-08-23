@@ -139,6 +139,19 @@ if _glosario:
     - EV mínimo que SUBE + Kelly que BAJA → el sistema confía en su calibración: se vuelve exigente y seguro.
     - EV mínimo que BAJA + Kelly que SUBE → el sistema detecta que se queda corto: aprovecha más oportunidades.
     """)
+
+    st.markdown("### 🎯 Ventana de cuotas recomendada: 1.8 – 2.8")
+    st.markdown("""
+    El sistema filtra automáticamente los picks fuera de este rango:
+    
+    - **Cuotas < 1.8**: exigen hit rates > 62% para tener valor. El modelo recalibrado (Capa B) rara vez puede demostrar esa confianza con certeza, así que son descartadas para evitar señales falsas.
+    - **Cuotas > 2.8**: alta varianza y típica zona de sobreestimación histórica del modelo. Se filtran para proteger la banca de rachas largas de pérdidas.
+    
+    **Zona viva (1.8-2.8)**: concentra picks con hit rates esperados del 42-60% y varianza contenida. Es el rango donde el modelo puede demostrar ventaja real sobre el mercado.
+    
+    💡 Puedes ajustar estos valores en el sidebar si quieres explorar otros rangos, pero la ventana 1.8-2.8 es la que el bot de Telegram usa por defecto.
+    """)
+    
     st.markdown("---")
     st.markdown("⚠️ Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.")
     st.stop()
@@ -319,7 +332,7 @@ def get_team_stats(team_name, team_db):
 # ==========================================
 # ANÁLISIS MULTI-MERCADO
 # ==========================================
-def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.0, only_today=True):
+def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.8, max_odd=2.8, only_today=True):
     value_bets = []
     now = datetime.now(timezone.utc)
     stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
@@ -561,8 +574,8 @@ ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Filtro de Cuotas")
 col_odd1, col_odd2 = st.sidebar.columns(2)
-min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.3, step=0.1)
-max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=3.0, step=0.1)
+min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.8, step=0.1)
+max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=2.8, step=0.1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Filtro de Fecha")
