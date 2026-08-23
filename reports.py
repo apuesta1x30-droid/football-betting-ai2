@@ -156,9 +156,9 @@ def fmt_stats(s, title):
     if s.get('avg_clv') is not None:
         L.append(f"🔻 CLV medio: <b>{s['avg_clv']:+.1f}%</b> ({s['clv_n']} picks) "
                  f"· bate al cierre: <b>{s['beat_close']:.0f}%</b>")
-    lines.append("")
-    lines.append("🧠 <b>Interpretación</b>")
-    lines.append(interpret_stats(stats))
+    L.append("")
+    L.append("🧠 <b>Interpretación</b>")
+    L.append(interpret_stats(s))
     return "\n".join(L)
 
 
