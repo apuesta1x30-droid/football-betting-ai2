@@ -109,7 +109,7 @@ def interpret_stats(stats):
     
     # CLV (validación del mercado)
     if clv is not None and settled >= 20:
-        if clv < -3:
+        if clv < -2:
             lines.append("🔻 CLV negativo: el mercado no valida tus señales. "
                          "Posible ruido del modelo.")
         elif clv > 0:
