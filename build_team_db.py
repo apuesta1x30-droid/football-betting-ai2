@@ -14,9 +14,10 @@ Fusiona con team_stats_db.csv existente (actualiza + añade + conserva).
 import io
 import os
 import re
+import time
 import unicodedata
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 import pandas as pd
@@ -223,157 +224,74 @@ def compute_team_stats(match_rows):
 # FASE 2: ESPN
 # ========================================
 
-def get_espn_teams(league_code):
-    """Obtiene lista de equipos de una liga ESPN."""
-    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams"
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            logger.warning(f"⚠️ ESPN {league_code}: HTTP {r.status_code}")
-            return []
-        
-        data = r.json()
-        teams = []
-        for entry in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
-            team_data = entry.get("team", {})
-            team_id = team_data.get("id")
-            team_name = team_data.get("displayName") or team_data.get("name")
-            if team_id and team_name:
-                teams.append({
-                    "id": team_id,
-                    "name": team_name,
-                    "league": league_code
-                })
-        
-        logger.info(f"✅ ESPN {league_code}: {len(teams)} equipos encontrados")
-        return teams
-    
-    except Exception as e:
-        logger.warning(f"⚠️ ESPN {league_code} error: {e}")
-        return []
-
-
-def get_espn_team_schedule(league_code, team_id, team_name):
-    """Obtiene resultados recientes de un equipo ESPN."""
-    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/teams/{team_id}/schedule"
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code != 200:
-            return None
-        
-        data = r.json()
-        events = data.get("events", [])
-        
-        match_rows = []
-        for event in events:
-            # Solo partidos completados
-            status = event.get("status", {}).get("type", {}).get("name", "")
-            if status not in ["STATUS_FINAL", "STATUS_FULL_TIME"]:
-                continue
-            
-            # Parsear fecha
-            date_str = event.get("date", "")
-            try:
-                date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            except:
-                continue
-            
-            # Buscar equipo local/visitante
-            competitions = event.get("competitions", [])
-            if not competitions:
-                continue
-            
-            comp = competitions[0]
-            competitors = comp.get("competitors", [])
-            
-            home_team = None
-            away_team = None
-            home_score = None
-            away_score = None
-            
-            for competitor in competitors:
-                team_data = competitor.get("team", {})
-                comp_team_id = team_data.get("id")
-                comp_team_name = team_data.get("displayName") or team_data.get("name")
-                
-                score = competitor.get("score")
-                if score is not None:
-                    try:
-                        score = int(score)
-                    except:
-                        continue
-                
-                if competitor.get("homeAway") == "home":
-                    home_team = comp_team_name
-                    home_score = score
-                else:
-                    away_team = comp_team_name
-                    away_score = score
-            
-            if home_team is None or away_team is None or home_score is None or away_score is None:
-                continue
-            
-            # Determinar si nuestro equipo es local o visitante
-            is_home = (str(team_id) == str(competitors[0].get("team", {}).get("id")) 
-                      if competitors[0].get("homeAway") == "home" 
-                      else str(team_id) == str(competitors[1].get("team", {}).get("id")))
-            
-            if is_home:
-                gf, ga = home_score, away_score
-            else:
-                gf, ga = away_score, home_score
-            
-            total_goals = gf + ga
-            over25 = 1 if total_goals > 2.5 else 0
-            btts = 1 if gf > 0 and ga > 0 else 0
-            
-            if gf > ga:
-                pts = 3
-            elif gf < ga:
-                pts = 0
-            else:
-                pts = 1
-            
-            match_rows.append({
-                "Date": date,
-                "Team": team_name,
-                "GF": gf,
-                "GA": ga,
-                "Pts": pts,
-                "Over25": over25,
-                "BTTS": btts,
-            })
-        
-        return match_rows
-    
-    except Exception as e:
-        logger.debug(f"ESPN {team_name} ({team_id}) error: {e}")
-        return None
-
-
 def download_espn_data():
-    """Descarga datos de todas las ligas ESPN."""
-    all_match_rows = []
-    
+    """Fase 2: resultados reales vía scoreboards públicos de ESPN
+    (el mismo endpoint que usa la liquidación automática).
+    Recorre los últimos 45 días por liga y recoge partidos completados."""
+    ESPN_DAYS_BACK = 45
+    all_rows = []
+    today = datetime.utcnow().date()
+
     for league_code, league_name in ESPN_LEAGUES.items():
-        teams = get_espn_teams(league_code)
-        
-        for team_info in teams:
-            team_id = team_info["id"]
-            team_name = team_info["name"]
-            
-            match_rows = get_espn_team_schedule(league_code, team_id, team_name)
-            if match_rows:
-                all_match_rows.extend(match_rows)
-        
-        logger.info(f"✅ ESPN {league_name}: datos descargados")
-    
-    if not all_match_rows:
+        league_count = 0
+        for days_back in range(ESPN_DAYS_BACK, -1, -1):
+            d = today - timedelta(days=days_back)
+            url = (f"https://site.api.espn.com/apis/site/v2/sports/soccer/"
+                   f"{league_code}/scoreboard?dates={d.strftime('%Y%m%d')}")
+            try:
+                r = requests.get(url, timeout=15)
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+            except Exception:
+                continue
+
+            for event in data.get("events", []):
+                status = event.get("status", {}).get("type", {})
+                if not status.get("completed"):
+                    continue
+                comps = event.get("competitions", [])
+                if not comps:
+                    continue
+                home = away = None
+                hs = as_ = None
+                for comp in comps[0].get("competitors", []):
+                    team_data = comp.get("team") or {}
+                    name = team_data.get("displayName") or team_data.get("name")
+                    try:
+                        score = int(comp.get("score"))
+                    except Exception:
+                        score = None
+                    if comp.get("homeAway") == "home":
+                        home, hs = name, score
+                    else:
+                        away, as_ = name, score
+                if not home or not away or hs is None or as_ is None:
+                    continue
+
+                over25 = 1 if (hs + as_) >= 3 else 0
+                btts = 1 if hs > 0 and as_ > 0 else 0
+                for team, gf, ga in ((home, hs, as_), (away, as_, hs)):
+                    all_rows.append({
+                        "Date": datetime(d.year, d.month, d.day),
+                        "Team": team,
+                        "GF": gf,
+                        "GA": ga,
+                        "Pts": 3 if gf > ga else (1 if gf == ga else 0),
+                        "Over25": over25,
+                        "BTTS": btts,
+                    })
+                league_count += 1
+            time.sleep(0.2)  # cortesía con ESPN
+
+        logger.info(f"✅ ESPN {league_name}: {league_count} partidos completados")
+
+    if not all_rows:
         logger.warning("⚠️ No se descargaron datos de ESPN")
         return pd.DataFrame()
-    
-    df = pd.DataFrame(all_match_rows)
-    logger.info(f"⚽ ESPN: {len(df)} partidos válidos descargados")
+
+    df = pd.DataFrame(all_rows)
+    logger.info(f"⚽ ESPN: {len(df)} filas equipo-partido descargadas")
     return df
 
 
