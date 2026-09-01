@@ -549,7 +549,13 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
         df = pd.DataFrame(value_bets)
         df = df.drop_duplicates()
         return df, stats
-    return pd.DataFrame(), stats
+
+    # Crear dataframe vacío con las columnas correctas
+    df_empty = pd.DataFrame(columns=[
+        "Liga", "Partido", "Hora", "Mercado", "Cuota", 
+        "Prob. IA", "Prob. Casa", "EV (%)", "EV Ajustado (%)", "Fuente"
+    ])
+    return df_empty, stats
 
 # ==========================================
 # INTERFAZ
