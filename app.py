@@ -148,7 +148,7 @@ if _glosario:
 # ==========================================
 # Recopilamos hasta 3 API keys de The Odds API para rotación automática
 THE_ODDS_API_KEYS = [
-    st.secrets.get("THE_ODDS_API_KEY_1", os.getenv("THE_ODDS_API_KEY_1", "")),
+    st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", "")),
     st.secrets.get("THE_ODDS_API_KEY_2", os.getenv("THE_ODDS_API_KEY_2", "")),
     st.secrets.get("THE_ODDS_API_KEY_3", os.getenv("THE_ODDS_API_KEY_3", ""))
 ]
