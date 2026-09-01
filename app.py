@@ -521,6 +521,14 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             ev = (prob * odd) - 1
             ev_percentage = ev * 100
             
+            # Determinar fuente real
+            if is_calculated:
+                fuente = "Cálculo (modelo)"
+            elif market_key.startswith("DC_") or market_key.startswith("HT_") or market_key.startswith("BTTS_"):
+                fuente = "API-Football"
+            else:
+                fuente = "The Odds API"
+            
             if ev_percentage > 2.0:
                 value_bets.append({
                     "Liga": league,
@@ -531,7 +539,7 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
                     "Prob. IA": prob,
                     "Prob. Casa": 1/odd,
                     "EV (%)": ev_percentage,
-                    "Fuente": "Cálculo" if is_calculated else "API-Football"
+                    "Fuente": fuente
                 })
     
     if value_bets:
