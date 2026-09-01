@@ -1,4 +1,15 @@
+import os
 import streamlit as st
+
+# ==========================================
+# 1. INYECTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
+# (ESTO DEBE IR ANTES DE IMPORTAR STATSTRACKER)
+# ==========================================
+os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL", "")
+os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")
+os.environ["SUPABASE_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")  # Fallback por compatibilidad
+
+# 2. AHORA SÍ, IMPORTAMOS EL RESTO
 import pandas as pd
 import numpy as np
 import requests
@@ -8,22 +19,10 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
-import os
+
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# EXPORTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
-# (DEBE IR ANTES DE IMPORTAR STATSTRACKER)
-# ==========================================
-if st.secrets.get("SUPABASE_URL"):
-    os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL")
-if st.secrets.get("SUPABASE_ANON_KEY"):
-    os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY")
-
-# Debug: verificar que las variables están disponibles
-print(f"✅ SUPABASE_URL configurada: {bool(os.environ.get('SUPABASE_URL'))}")
-print(f"✅ SUPABASE_ANON_KEY configurada: {bool(os.environ.get('SUPABASE_ANON_KEY'))}")
-
+# 3. IMPORTAMOS STATSTRACKER (ahora ya encontrará las variables)
 from stats_tracker import StatsTracker
 
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
