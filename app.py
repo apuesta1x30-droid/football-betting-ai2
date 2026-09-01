@@ -11,18 +11,21 @@ from scipy.stats import poisson
 import os
 warnings.filterwarnings('ignore')
 
-from stats_tracker import StatsTracker
-
 # ==========================================
 # EXPORTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
+# (DEBE IR ANTES DE IMPORTAR STATSTRACKER)
 # ==========================================
-import os
-
-# Exportar credenciales de Supabase para que StatsTracker pueda acceder
 if st.secrets.get("SUPABASE_URL"):
     os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL")
 if st.secrets.get("SUPABASE_ANON_KEY"):
     os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY")
+
+# Debug: verificar que las variables están disponibles
+print(f"✅ SUPABASE_URL configurada: {bool(os.environ.get('SUPABASE_URL'))}")
+print(f"✅ SUPABASE_ANON_KEY configurada: {bool(os.environ.get('SUPABASE_ANON_KEY'))}")
+
+from stats_tracker import StatsTracker
+
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
 
 # ==========================================
