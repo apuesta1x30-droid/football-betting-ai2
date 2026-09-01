@@ -1,15 +1,5 @@
 import os
 import streamlit as st
-
-# ==========================================
-# 1. INYECTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
-# (ESTO DEBE IR ANTES DE IMPORTAR STATSTRACKER)
-# ==========================================
-os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL", "")
-os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")
-os.environ["SUPABASE_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")  # Fallback por compatibilidad
-
-# 2. AHORA SÍ, IMPORTAMOS EL RESTO
 import pandas as pd
 import numpy as np
 import requests
@@ -19,10 +9,16 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
-
 warnings.filterwarnings('ignore')
 
-# 3. IMPORTAMOS STATSTRACKER (ahora ya encontrará las variables)
+# ==========================================
+# INYECTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
+# (DEBE IR ANTES DE IMPORTAR STATSTRACKER)
+# ==========================================
+os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL", "")
+os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")
+os.environ["SUPABASE_KEY"] = st.secrets.get("SUPABASE_ANON_KEY", "")  # Fallback por compatibilidad
+
 from stats_tracker import StatsTracker
 
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
@@ -37,10 +33,10 @@ except Exception:
     _glosario = False
 
 if _glosario:
-    st.title(" Glosario de métricas")
+    st.title("📚 Glosario de métricas")
     st.caption("Guía completa para interpretar las estadísticas del sistema")
     
-    st.markdown("## 🎯 Métricas de una alerta")
+    st.markdown("##  Métricas de una alerta")
     st.markdown("""
     - **EV (%)** — Valor esperado: `(Prob. IA × cuota) − 1`. Es el margen que el sistema cree que tienes. ✅ Favorable: cuanto más alto, mejor (el sistema solo notifica EV ≥ 10% por defecto).
     - **Prob. IA vs Prob. Casa** — La probabilidad que estima el modelo frente a la que implica la cuota (`1/cuota`). Si la IA dice más que la casa, hay value.
@@ -223,17 +219,17 @@ def scan_all_markets():
                 return response.json()
             
             if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text or "usage" in response.text.lower():
-                st.warning(f"️ API Key #{i+1} agotada. Probando siguiente...")
+                st.warning(f"⚠️ API Key #{i+1} agotada. Probando siguiente...")
                 continue
             
             st.error(f"Error en The Odds API (Key #{i+1}): {response.status_code}")
             continue
             
         except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Error de conexión con Key #{i+1}. Probando siguiente...")
+            st.warning(f"️ Error de conexión con Key #{i+1}. Probando siguiente...")
             continue
         except Exception as e:
-            st.warning(f"⚠️ Error inesperado con Key #{i+1}. Probando siguiente...")
+            st.warning(f"️ Error inesperado con Key #{i+1}. Probando siguiente...")
             continue
     
     st.error("❌ Todas las API keys de The Odds API fallaron.")
@@ -521,6 +517,11 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             ev = (prob * odd) - 1
             ev_percentage = ev * 100
             
+            # Calcular EV ajustado por calibración del modelo
+            gap_calibracion = 30.8  # Valor estático temporal (se actualiza dinámicamente abajo)
+            prob_ajustada = max(0.01, prob - (gap_calibracion / 100))
+            ev_ajustado = round(((prob_ajustada * odd) - 1) * 100, 1)
+            
             # Determinar fuente real
             if is_calculated:
                 fuente = "Cálculo (modelo)"
@@ -529,7 +530,8 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
             else:
                 fuente = "The Odds API"
             
-            if ev_percentage > 2.0:
+            # Solo añadir si EV ajustado > -20% (filtro de calidad)
+            if ev_percentage > 2.0 and ev_ajustado > -20:
                 value_bets.append({
                     "Liga": league,
                     "Partido": f"{home_team} vs {away_team}",
@@ -538,7 +540,8 @@ def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.
                     "Cuota": odd,
                     "Prob. IA": prob,
                     "Prob. Casa": 1/odd,
-                    "EV (%)": ev_percentage,
+                    "EV (%)": round(ev_percentage, 1),
+                    "EV Ajustado (%)": ev_ajustado,
                     "Fuente": fuente
                 })
     
@@ -564,20 +567,20 @@ with st.expander("❓ ¿Qué es el Expected Value (EV)? - Guía completa", expan
     EV = (Probabilidad_Real × Cuota) - 1
     ```
     
-    ### 📊 Interpretación:
+    ###  Interpretación:
     | EV | Significado | Acción |
     |----|-------------|--------|
-    | **EV > 10%** | 🟢 Valor EXCEPCIONAL | Apuesta prioritaria |
-    | **EV 5-10%** |  Valor MUY BUENO | Apuesta recomendada |
+    | **EV > 10%** |  Valor EXCEPCIONAL | Apuesta prioritaria |
+    | **EV 5-10%** | 🟡 Valor MUY BUENO | Apuesta recomendada |
     | **EV 2-5%** | ⚪ Valor MODERADO | Apuesta opcional |
-    | **EV < 2%** |  Sin valor | NO apostar |
+    | **EV < 2%** | 🔴 Sin valor | NO apostar |
     """)
 
 st.sidebar.header("⚙️ Configuración")
 ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_value=20.0, value=5.0, step=1.0)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📊 Filtro de Cuotas")
+st.sidebar.subheader(" Filtro de Cuotas")
 col_odd1, col_odd2 = st.sidebar.columns(2)
 min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.3, step=0.1)
 max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=3.0, step=0.1)
@@ -588,7 +591,7 @@ only_today = st.sidebar.checkbox("Solo partidos de HOY", value=True)
 
 team_db_preview = load_team_database()
 st.sidebar.markdown("---")
-st.sidebar.info(f"📁 Equipos en base de datos: **{len(team_db_preview)}**")
+st.sidebar.info(f" Equipos en base de datos: **{len(team_db_preview)}**")
 
 st.sidebar.markdown("### 🎯 Mercados Activos:")
 st.sidebar.markdown("- ✅ Over 1.5, 2.5, 3.5 Goles")
@@ -654,9 +657,9 @@ if 'df_bets' in st.session_state:
     with col_f2:
         selected_league = st.selectbox("🏆 Filtrar por Liga:", options=["Todas"] + sorted(df_filtered["Liga"].unique().tolist()) if not df_filtered.empty else ["Todas"])
     with col_f3:
-        selected_source = st.selectbox("🔖 Filtrar por Fuente:", options=["Todas", "API-Football", "Cálculo"])
+        selected_source = st.selectbox("🔖 Filtrar por Fuente:", options=["Todas", "The Odds API", "API-Football", "Cálculo (modelo)"])
     with col_f4:
-        sort_by = st.selectbox(" Ordenar por:", options=["EV (%) ↓", "EV (%) ↑", "Cuota ↓", "Cuota ↑", "Prob. IA ↓", "Hora ↑", "Liga A-Z"])
+        sort_by = st.selectbox("📈 Ordenar por:", options=["EV (%) ↓", "EV (%) ↑", "EV Ajustado (%) ↓", "EV Ajustado (%) ↑", "Cuota ↓", "Cuota ↑", "Prob. IA ↓", "Hora ↑", "Liga A-Z"])
     
     if selected_market != "Todos" and not df_filtered.empty:
         df_filtered = df_filtered[df_filtered["Mercado"] == selected_market]
@@ -698,7 +701,7 @@ if 'df_bets' in st.session_state:
                 st.markdown(f"- **{source}**: {count}")
         
         st.markdown("---")
-        st.markdown("####  Recomendación del Sistema")
+        st.markdown("#### 💡 Recomendación del Sistema")
         high_ev = df_filtered[df_filtered['EV (%)'] >= 10]
         medium_ev = df_filtered[(df_filtered['EV (%)'] >= 5) & (df_filtered['EV (%)'] < 10)]
         low_ev = df_filtered[(df_filtered['EV (%)'] >= 2) & (df_filtered['EV (%)'] < 5)]
@@ -708,11 +711,11 @@ if 'df_bets' in st.session_state:
         if len(medium_ev) > 0:
             st.info(f"🟡 **{len(medium_ev)} apuestas de BUEN valor** (EV 5-10%). Recomendadas.")
         if len(low_ev) > 0:
-            st.warning(f" **{len(low_ev)} apuestas de valor moderado** (EV 2-5%). Opcionales.")
+            st.warning(f"⚪ **{len(low_ev)} apuestas de valor moderado** (EV 2-5%). Opcionales.")
         
         avg_odd = df_filtered['Cuota'].mean()
         if avg_odd < 1.8:
-            st.markdown(f"📉 **Perfil de riesgo**: Conservador (cuota media {avg_odd:.2f})")
+            st.markdown(f" **Perfil de riesgo**: Conservador (cuota media {avg_odd:.2f})")
         elif avg_odd < 2.5:
             st.markdown(f"📊 **Perfil de riesgo**: Moderado (cuota media {avg_odd:.2f})")
         else:
@@ -728,17 +731,31 @@ if 'df_bets' in st.session_state:
         df_display["Prob. IA"] = df_display["Prob. IA"].apply(lambda x: f"{x:.1%}")
         df_display["Prob. Casa"] = df_display["Prob. Casa"].apply(lambda x: f"{x:.1%}")
         df_display["EV (%)"] = df_display["EV (%)"].apply(lambda x: f"{x:.1f}%")
+        df_display["EV Ajustado (%)"] = df_display["EV Ajustado (%)"].apply(lambda x: f"{x:.1f}%")
         
         def color_ev(val):
             try:
                 ev_val = float(val.replace('%', ''))
                 if ev_val > 10: return 'background-color: #2ecc71; color: white; font-weight: bold'
                 elif ev_val > 5: return 'background-color: #27ae60; color: white'
-                elif ev_val > 2: return 'background-color: #95e1d3; color: black'
+                elif ev_val > 0: return 'background-color: #95e1d3; color: black'
                 else: return 'background-color: #f9e79f; color: black'
             except: return ''
         
-        st.dataframe(df_display.style.map(color_ev, subset=["EV (%)"]), use_container_width=True, hide_index=True)
+        def color_ev_ajustado(val):
+            try:
+                ev_val = float(val.replace('%', ''))
+                if ev_val > 5: return 'background-color: #2ecc71; color: white; font-weight: bold'
+                elif ev_val > 0: return 'background-color: #27ae60; color: white'
+                elif ev_val > -10: return 'background-color: #f9e79f; color: black'
+                else: return 'background-color: #e74c3c; color: white'
+            except: return ''
+        
+        st.dataframe(
+            df_display.style.map(color_ev, subset=["EV (%)"]).map(color_ev_ajustado, subset=["EV Ajustado (%)"]),
+            width='stretch',
+            hide_index=True
+        )
         
         if len(df_filtered) > 50:
             st.info(f"Mostrando las 50 mejores de {len(df_filtered)} Value Bets.")
@@ -768,9 +785,9 @@ if hist_stats['settled'] > 0:
     col7.metric("💰 PnL", f"{hist_stats['pnl']:+.2f} u")
     col8.metric("📈 Yield", f"{hist_stats['yield']:+.1f}%")
     if hist_stats['avg_ev_declared'] is not None:
-        col9.metric("📉 EV medio (declarado)", f"{hist_stats['avg_ev_declared']:+.1f}%")
+        col9.metric(" EV medio (declarado)", f"{hist_stats['avg_ev_declared']:+.1f}%")
     else:
-        col9.metric("📉 EV medio", "N/A")
+        col9.metric(" EV medio", "N/A")
     
     if hist_stats['calibration_gap'] is not None:
         gap = hist_stats['calibration_gap']
@@ -786,17 +803,17 @@ if hist_stats['settled'] > 0:
     if market_stats:
         df_markets = pd.DataFrame(market_stats).T
         df_markets = df_markets.sort_values('Total', ascending=False)
-        st.dataframe(df_markets, use_container_width=True)
+        st.dataframe(df_markets, width='stretch')
     
     st.markdown("#### 🏆 Rendimiento por Liga")
     league_stats = tracker.get_stats_by_league()
     if league_stats:
         df_leagues = pd.DataFrame(league_stats).T
         df_leagues = df_leagues.sort_values('Total', ascending=False).head(15)
-        st.dataframe(df_leagues, use_container_width=True)
+        st.dataframe(df_leagues, width='stretch')
 
 elif hist_stats['total'] > 0:
-    st.info(f"📊 Hay **{hist_stats['total']} picks registrados** pero ninguno liquidado aún.")
+    st.info(f" Hay **{hist_stats['total']} picks registrados** pero ninguno liquidado aún.")
     st.info("💡 Los picks se liquidan automáticamente con los cron de liquidación (07:15 y 13:15 UTC).")
 else:
     st.info("📊 Aún no hay picks registrados. Los picks se guardarán a partir del próximo escaneo.")
@@ -810,7 +827,7 @@ st.caption("Evolución temporal del rendimiento REAL (picks liquidados)")
 
 with st.expander("❓ Cómo leer estos gráficos - Guía rápida", expanded=False):
     st.markdown("""
-    ### 💰 PnL acumulado (unidades, stake=1)
+    ###  PnL acumulado (unidades, stake=1)
     - Cada punto es un pick liquidado, en orden de liquidación.
     - **Línea verde subiendo** = beneficio sostenido; **bajando** = racha negativa.
     - La **línea gris discontinua en 0** es el punto de equilibrio: por encima ganas, por debajo pierdes.
@@ -821,7 +838,7 @@ with st.expander("❓ Cómo leer estos gráficos - Guía rápida", expanded=Fals
     - La **línea verde punteada** es tu hit rate global (media de todos los liquidados).
     - Picos y valles son rachas cortas: un valle puntual no es grave si la línea global se mantiene.
 
-    ### ⚖️ Calibración: prometido vs real
+    ### ️ Calibración: prometido vs real
     - **Naranja** = Prob. IA media prometida hasta ese momento.
     - **Verde** = % de aciertos real hasta ese momento.
     - Si la naranja se separa **por encima** de la verde: la IA promete más de lo que cumple → exige más EV o baja stakes.
@@ -841,7 +858,7 @@ settled_hist = sorted(
 )
 
 if len(settled_hist) < 2:
-    st.info("📈 Los gráficos aparecerán en cuanto haya al menos 2 picks liquidados.")
+    st.info(" Los gráficos aparecerán en cuanto haya al menos 2 picks liquidados.")
 else:
     xs = list(range(1, len(settled_hist) + 1))
     cum_pnl, acc = [], 0.0
@@ -876,7 +893,7 @@ else:
     fig1.update_layout(title='💰 PnL acumulado (unidades, stake=1)',
                        xaxis_title='Pick liquidado nº', yaxis_title='Unidades',
                        margin=dict(t=50, b=40))
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, width='stretch')
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
@@ -889,7 +906,7 @@ else:
         fig2.update_layout(title=f'🎯 Hit rate rodante (global: {overall_hit:.1f}%)',
                            xaxis_title='Pick liquidado nº', yaxis_title='%',
                            margin=dict(t=50, b=40))
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
     with col_g2:
         # Gráfico 3: Calibración acumulada
         fig3 = go.Figure()
@@ -899,16 +916,16 @@ else:
         fig3.add_trace(go.Scatter(x=xs, y=cum_hit, mode='lines',
                                   name='Hit rate real',
                                   line=dict(color='#27ae60', width=2)))
-        fig3.update_layout(title='️ Calibración: prometido vs real',
+        fig3.update_layout(title='⚖️ Calibración: prometido vs real',
                            xaxis_title='Pick liquidado nº', yaxis_title='%',
                            margin=dict(t=50, b=40))
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
 # ==========================================
 # CLV
 # ==========================================
 st.markdown("---")
-st.subheader("🔻 Closing Line Value (CLV)")
+st.subheader(" Closing Line Value (CLV)")
 st.caption("¿Bates al mercado? CLV = (cuota tomada / cuota de cierre − 1). Positivo = encuentras valor antes que la casa.")
 
 clv_picks = [p for p in picks_hist if p.get('closing_odds') and p.get('cuota')]
@@ -934,22 +951,22 @@ else:
     c1, c2, c3 = st.columns(3)
     c1.metric("🔻 CLV medio", f"{avg_clv:+.1f}%")
     c2.metric("🎯 Bate al cierre", f"{beat_pct:.0f}% ({beat}/{len(clvs)})")
-    c3.metric("📊 Picks con cierre", len(clv_picks))
+    c3.metric(" Picks con cierre", len(clv_picks))
     
     if avg_clv > 0:
         st.success("✅ CLV positivo: estás encontrando valor antes que el mercado. Señal de rentabilidad a largo plazo.")
     else:
-        st.warning("⚠️ CLV negativo o nulo: tus cuotas no baten al cierre. Revisa umbrales de EV.")
+        st.warning("️ CLV negativo o nulo: tus cuotas no baten al cierre. Revisa umbrales de EV.")
     
     fig4 = go.Figure()
     fig4.add_trace(go.Scatter(x=list(range(1, len(cum_clv) + 1)), y=cum_clv,
                               mode='lines+markers', name='CLV medio acumulado',
                               line=dict(color='#9b59b6', width=2.5)))
     fig4.add_hline(y=0, line_dash='dash', line_color='gray')
-    fig4.update_layout(title='🔻 CLV medio acumulado (%)',
+    fig4.update_layout(title=' CLV medio acumulado (%)',
                        xaxis_title='Pick con cierre nº', yaxis_title='%',
                        margin=dict(t=50, b=40))
-    st.plotly_chart(fig4, use_container_width=True)
+    st.plotly_chart(fig4, width='stretch')
 
 # ==========================================
 # FOOTER
@@ -958,7 +975,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9em;'>
     <p>⚠️ <strong>Aviso:</strong> Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.</p>
-    <p> Powered by XGBoost + API-Football + The Odds API</p>
+    <p>🧠 Powered by XGBoost + API-Football + The Odds API</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -969,7 +986,7 @@ st.markdown("---")
 st.subheader("🤖 Exportar Estadísticas a GitHub")
 st.caption("Genera un archivo `datos.json` en tu repositorio para que el bot de Telegram lo lea automáticamente.")
 
-if st.button("📤 Exportar Datos Ahora"):
+if st.button(" Exportar Datos Ahora"):
     try:
         from github import Github
         import json
@@ -1009,13 +1026,13 @@ if st.button("📤 Exportar Datos Ahora"):
                             export_data["mejor_mercado"] = str(best_market)
                             export_data["yield_mejor_mercado"] = round(float(df_m.loc[best_market, 'Yield']), 1)
                     except Exception as e:
-                        st.warning(f"⚠️ No se pudo calcular el mejor mercado: {e}")
+                        st.warning(f"️ No se pudo calcular el mejor mercado: {e}")
 
                 content = json.dumps(export_data, indent=4, ensure_ascii=False)
                 
                 try:
                     contents = repo.get_contents("datos.json")
-                    repo.update_file("datos.json", "🤖 Auto-actualización stats para Telegram", content, contents.sha)
+                    repo.update_file("datos.json", " Auto-actualización stats para Telegram", content, contents.sha)
                 except:
                     repo.create_file("datos.json", "🤖 Creación inicial stats para Telegram", content)
                     
@@ -1024,6 +1041,6 @@ if st.button("📤 Exportar Datos Ahora"):
                     st.json(export_data)
                 
     except ImportError:
-        st.error("❌ Falta la librería `PyGithub`. Añádela a tu requirements.txt de Streamlit.")
+        st.error(" Falta la librería `PyGithub`. Añádela a tu requirements.txt de Streamlit.")
     except Exception as e:
         st.error(f"❌ Error al exportar: {e}")
