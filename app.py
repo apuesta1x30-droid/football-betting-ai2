@@ -220,11 +220,11 @@ if 'current_api_key_index' not in st.session_state:
 
 @st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
 def scan_all_markets():
-    # ==========================================
+# ==========================================
 # ESCANEO DE MERCADOS (VERSIÓN DEBUG SIN CACHE)
 # ==========================================
-if 'current_api_key_index' not in st.session_state:
-    st.session_state['current_api_key_index'] = 0
+    if 'current_api_key_index' not in st.session_state:
+        st.session_state['current_api_key_index'] = 0
 
 def scan_all_markets_debug():
     st.info("🔍 Iniciando proceso de escaneo...")
