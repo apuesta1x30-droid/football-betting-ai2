@@ -13,6 +13,16 @@ warnings.filterwarnings('ignore')
 
 from stats_tracker import StatsTracker
 
+# ==========================================
+# EXPORTAR SECRETS DE STREAMLIT COMO VARIABLES DE ENTORNO
+# ==========================================
+import os
+
+# Exportar credenciales de Supabase para que StatsTracker pueda acceder
+if st.secrets.get("SUPABASE_URL"):
+    os.environ["SUPABASE_URL"] = st.secrets.get("SUPABASE_URL")
+if st.secrets.get("SUPABASE_ANON_KEY"):
+    os.environ["SUPABASE_ANON_KEY"] = st.secrets.get("SUPABASE_ANON_KEY")
 st.set_page_config(page_title="⚽ Multi-Mercado Value Bet Scanner", layout="wide")
 
 # ==========================================
