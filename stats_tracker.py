@@ -20,11 +20,14 @@ class StatsTracker:
         self.client = self._connect()
 
     def _connect(self):
+        # Añadimos SUPABASE_ANON_KEY para que coincida con el nombre estándar de Supabase
         url = os.getenv("SUPABASE_URL_FB") or os.getenv("SUPABASE_URL", "")
-        key = os.getenv("SUPABASE_KEY_FB") or os.getenv("SUPABASE_KEY", "")
+        key = os.getenv("SUPABASE_KEY_FB") or os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY", "")
+        
         if not url or not key:
             logger.warning("⚠️ Credenciales Supabase no configuradas. Estadísticas desactivadas.")
             return None
+       
         try:
             from supabase import create_client
             logger.info(f"✅ Conectado a Supabase (tabla: {self.table})")
