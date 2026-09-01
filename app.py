@@ -220,12 +220,25 @@ if 'current_api_key_index' not in st.session_state:
 
 @st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
 def scan_all_markets():
+    # ==========================================
+# ESCANEO DE MERCADOS (VERSIÓN DEBUG SIN CACHE)
+# ==========================================
+if 'current_api_key_index' not in st.session_state:
+    st.session_state['current_api_key_index'] = 0
+
+def scan_all_markets_debug():
+    st.info("🔍 Iniciando proceso de escaneo...")
+    
     if not THE_ODDS_API_KEYS:
-        st.error("❌ No hay API keys de The Odds API configuradas en los Secrets de Streamlit.")
+        st.error("❌ La lista de API keys está vacía. Revisa los Secrets (THE_ODDS_API_KEY_1, etc.).")
         return []
     
-    # Intentar con cada key hasta que una funcione
+    st.write(f"✅ Se encontraron {len(THE_ODDS_API_KEYS)} API keys configuradas.")
+    
     for i, api_key in enumerate(THE_ODDS_API_KEYS):
+        key_preview = api_key[-4:] if len(api_key) >= 4 else "????"
+        st.write(f"⏳ Probando API Key #{i+1} (termina en ...{key_preview})...")
+        
         url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
         params = {
             "regions": "eu,us",
@@ -235,31 +248,34 @@ def scan_all_markets():
         }
         
         try:
-            response = requests.get(url, params=params, timeout=15)
+            st.write("📡 Enviando petición a The Odds API (timeout 10s)...")
+            # Usamos tupla para timeout: (connect_timeout, read_timeout)
+            response = requests.get(url, params=params, timeout=(5, 10))
+            st.write(f"📡 Respuesta recibida. Status Code: {response.status_code}")
             
-            # Si la respuesta es exitosa, devolver los datos inmediatamente
             if response.status_code == 200:
                 st.session_state['current_api_key_index'] = i
+                st.success(f"✅ Key #{i+1} funcionó correctamente. Descargando datos...")
                 return response.json()
             
-            # Detectar agotamiento de créditos
             if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text or "usage" in response.text.lower():
-                st.warning(f"️ API Key #{i+1} agotada. Probando con la siguiente...")
+                st.warning(f"⚠️ API Key #{i+1} agotada. Probando la siguiente...")
                 continue
             
-            # Otros errores de la API
-            st.error(f"Error en The Odds API (Key #{i+1}): {response.status_code} - {response.text[:200]}")
+            st.error(f"❌ Error en The Odds API (Key #{i+1}): {response.status_code} - {response.text[:150]}")
             continue
             
+        except requests.exceptions.Timeout:
+            st.warning(f"⏱️ Timeout con Key #{i+1}. Probando la siguiente...")
+            continue
         except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Error de conexión con Key #{i+1}: {e}. Probando la siguiente...")
+            st.warning(f"⚠️ Error de red con Key #{i+1}: {e}. Probando la siguiente...")
             continue
         except Exception as e:
-            st.warning(f"⚠️ Error inesperado con Key #{i+1}: {e}. Probando la siguiente...")
+            st.warning(f"⚠️ Error inesperado con Key #{i+1}: {type(e).__name__}: {e}. Probando la siguiente...")
             continue
             
-    # Si el bucle termina, significa que todas fallaron
-    st.error("❌ Todas las API keys de The Odds API están agotadas o han fallado.")
+    st.error("❌ Todas las API keys fallaron o están agotadas.")
     return []
     
 def get_fixture_id_from_api_football(home_team, away_team, match_date):
@@ -624,26 +640,31 @@ team_db = load_team_database()
 if not models:
     st.stop()
 
-if st.button("🔄 Escanear Todos los Mercados Ahora"):
-    with st.spinner("Analizando mercados..."):
-        fixtures = scan_all_markets()
-        if fixtures:
-            df_bets, stats = analyze_multi_market(models, fixtures, team_db, min_odd=min_odd, max_odd=max_odd, only_today=only_today)
-            
-            tracker_register = StatsTracker()
-            registered = 0
-            if not df_bets.empty:
-                for _, row in df_bets.iterrows():
-                    if tracker_register.register_pick(row.to_dict()):
-                        registered += 1
-            
-            st.session_state['df_bets'] = df_bets
-            st.session_state['stats'] = stats
-            st.session_state['total_fixtures'] = len(fixtures)
-            st.session_state['registered_picks'] = registered
-            st.success(f"✅ Escaneo completado | 💾 {registered} picks registrados")
-        else:
-            st.error("No se pudieron obtener datos de la API")
+if st.button("🔄 Escanear Todos los Mercados Ahora (MODO DEBUG)"):
+    # No usamos st.spinner para poder ver los mensajes de texto paso a paso en pantalla
+    
+    fixtures = scan_all_markets_debug()
+    
+    if fixtures:
+        st.success(f"✅ ¡Escaneo completado! Se obtuvieron {len(fixtures)} eventos de la API.")
+        
+        # Aquí va tu lógica de análisis original
+        df_bets, stats = analyze_multi_market(models, fixtures, team_db, min_odd=min_odd, max_odd=max_odd, only_today=only_today)
+        
+        tracker_register = StatsTracker()
+        registered = 0
+        if not df_bets.empty:
+            for _, row in df_bets.iterrows():
+                if tracker_register.register_pick(row.to_dict()):
+                    registered += 1
+        
+        st.session_state['df_bets'] = df_bets
+        st.session_state['stats'] = stats
+        st.session_state['total_fixtures'] = len(fixtures)
+        st.session_state['registered_picks'] = registered
+        st.success(f"💾 {registered} picks registrados en el tracker.")
+    else:
+        st.error("❌ No se pudieron obtener datos. Revisa los mensajes de error arriba.")
 
 if 'df_bets' in st.session_state:
     df_bets = st.session_state['df_bets']
