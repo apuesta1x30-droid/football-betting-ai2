@@ -77,7 +77,7 @@ if _glosario:
     |---|---|---|
     | ✅ + | ✅ + | Edge real: sistema rentable y validado por el mercado |
     | ✅ + | 🔻 − | Ganas sin batir al mercado: posible suerte a corto. Vigilar |
-    | ❌ − | ✅ + | Pierdes pero eliges bien: señal positiva a largo plazo |
+    |  − | ✅ + | Pierdes pero eliges bien: señal positiva a largo plazo |
     | ❌ − | 🔻 − | Revisar modelo y umbrales |
     """)
     
@@ -139,21 +139,8 @@ if _glosario:
     - EV mínimo que SUBE + Kelly que BAJA → el sistema confía en su calibración: se vuelve exigente y seguro.
     - EV mínimo que BAJA + Kelly que SUBE → el sistema detecta que se queda corto: aprovecha más oportunidades.
     """)
-
-    st.markdown("### 🎯 Ventana de cuotas recomendada: 1.8 – 2.8")
-    st.markdown("""
-    El sistema filtra automáticamente los picks fuera de este rango:
-    
-    - **Cuotas < 1.8**: exigen hit rates > 62% para tener valor. El modelo recalibrado (Capa B) rara vez puede demostrar esa confianza con certeza, así que son descartadas para evitar señales falsas.
-    - **Cuotas > 2.8**: alta varianza y típica zona de sobreestimación histórica del modelo. Se filtran para proteger la banca de rachas largas de pérdidas.
-    
-    **Zona viva (1.8-2.8)**: concentra picks con hit rates esperados del 42-60% y varianza contenida. Es el rango donde el modelo puede demostrar ventaja real sobre el mercado.
-    
-    💡 Puedes ajustar estos valores en el sidebar si quieres explorar otros rangos, pero la ventana 1.8-2.8 es la que el bot de Telegram usa por defecto.
-    """)
-    
     st.markdown("---")
-    st.markdown("⚠️ Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.")
+    st.markdown("️ Herramienta de análisis estadístico. Las apuestas conllevan riesgo. Apuesta con responsabilidad.")
     st.stop()
 
 # ==========================================
@@ -161,7 +148,7 @@ if _glosario:
 # ==========================================
 # Recopilamos hasta 3 API keys de The Odds API para rotación automática
 THE_ODDS_API_KEYS = [
-    st.secrets.get("THE_ODDS_API_KEY", os.getenv("THE_ODDS_API_KEY", "")),
+    st.secrets.get("THE_ODDS_API_KEY_1", os.getenv("THE_ODDS_API_KEY_1", "")),
     st.secrets.get("THE_ODDS_API_KEY_2", os.getenv("THE_ODDS_API_KEY_2", "")),
     st.secrets.get("THE_ODDS_API_KEY_3", os.getenv("THE_ODDS_API_KEY_3", ""))
 ]
@@ -171,21 +158,6 @@ THE_ODDS_API_KEYS = [key for key in THE_ODDS_API_KEYS if key]
 API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", ""))
 API_FOOTBALL_HEADERS = {'x-rapidapi-key': API_FOOTBALL_KEY, 'x-rapidapi-host': "v3.football.api-sports.io"}
 
-# Debug: Mostrar estado de las API keys
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔍 Debug API Keys")
-st.sidebar.write(f"The Odds API Keys disponibles: {len(THE_ODDS_API_KEYS)}")
-for i, key in enumerate(THE_ODDS_API_KEYS, 1):
-    if key:
-        st.sidebar.success(f"✅ Key #{i}: Configurada")
-    else:
-        st.sidebar.error(f"❌ Key #{i}: Vacía")
-
-if API_FOOTBALL_KEY:
-    st.sidebar.success("✅ API-Football: Configurada")
-else:
-    st.sidebar.error("❌ API-Football: No configurada")
-    
 # ==========================================
 # CARGA DE MODELOS Y DATOS
 # ==========================================
@@ -212,19 +184,10 @@ def load_team_database():
         return {}
 
 # ==========================================
-# ESCANEO DE MERCADOS
-# ==========================================
-# Variable de sesión para trackear qué key usar
-if 'current_api_key_index' not in st.session_state:
-    st.session_state['current_api_key_index'] = 0
-
-@st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
-def scan_all_markets():
-# ==========================================
 # ESCANEO DE MERCADOS (VERSIÓN DEBUG SIN CACHE)
 # ==========================================
-    if 'current_api_key_index' not in st.session_state:
-        st.session_state['current_api_key_index'] = 0
+if 'current_api_key_index' not in st.session_state:
+    st.session_state['current_api_key_index'] = 0
 
 def scan_all_markets_debug():
     st.info("🔍 Iniciando proceso de escaneo...")
@@ -259,7 +222,7 @@ def scan_all_markets_debug():
                 return response.json()
             
             if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text or "usage" in response.text.lower():
-                st.warning(f"⚠️ API Key #{i+1} agotada. Probando la siguiente...")
+                st.warning(f"️ API Key #{i+1} agotada. Probando la siguiente...")
                 continue
             
             st.error(f"❌ Error en The Odds API (Key #{i+1}): {response.status_code} - {response.text[:150]}")
@@ -272,12 +235,12 @@ def scan_all_markets_debug():
             st.warning(f"⚠️ Error de red con Key #{i+1}: {e}. Probando la siguiente...")
             continue
         except Exception as e:
-            st.warning(f"⚠️ Error inesperado con Key #{i+1}: {type(e).__name__}: {e}. Probando la siguiente...")
+            st.warning(f"️ Error inesperado con Key #{i+1}: {type(e).__name__}: {e}. Probando la siguiente...")
             continue
             
     st.error("❌ Todas las API keys fallaron o están agotadas.")
     return []
-    
+
 def get_fixture_id_from_api_football(home_team, away_team, match_date):
     try:
         response = requests.get(
@@ -368,7 +331,7 @@ def get_team_stats(team_name, team_db):
 # ==========================================
 # ANÁLISIS MULTI-MERCADO
 # ==========================================
-def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.8, max_odd=2.8, only_today=True):
+def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.0, only_today=True):
     value_bets = []
     now = datetime.now(timezone.utc)
     stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
@@ -587,7 +550,7 @@ st.markdown("Escaneando **6 mercados** (4 reales + 2 inferidos) en **50+ ligas**
 
 with st.expander("❓ ¿Qué es el Expected Value (EV)? - Guía completa", expanded=False):
     st.markdown("""
-    ## 🎯 ¿Qué es el Expected Value (EV)?
+    ##  ¿Qué es el Expected Value (EV)?
     El **Expected Value (Valor Esperado)** representa el beneficio o pérdida promedio si repitieses la misma apuesta muchas veces.
     
     ### 📐 Fórmula:
@@ -610,11 +573,11 @@ ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_
 st.sidebar.markdown("---")
 st.sidebar.subheader("📊 Filtro de Cuotas")
 col_odd1, col_odd2 = st.sidebar.columns(2)
-min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.8, step=0.1)
-max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=2.8, step=0.1)
+min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.3, step=0.1)
+max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=3.0, step=0.1)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Filtro de Fecha")
+st.sidebar.subheader(" Filtro de Fecha")
 only_today = st.sidebar.checkbox("Solo partidos de HOY", value=True)
 
 team_db_preview = load_team_database()
@@ -628,11 +591,24 @@ st.sidebar.markdown("- ✅ BTTS (Ambos marcan)")
 st.sidebar.markdown("- ✅ Doble Oportunidad (1X, X2, 12)")
 st.sidebar.markdown("- ✅ Over 0.5 1ª Parte")
 
+# Debug API Keys
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔑 Estado de API Keys")
-st.sidebar.info(f"Keys configuradas y activas: {len(THE_ODDS_API_KEYS)}/3")
-if len(THE_ODDS_API_KEYS) == 0:
-    st.sidebar.error("⚠️ ¡Añade THE_ODDS_API_KEY_1 en los Secrets!")
+st.sidebar.subheader("🔍 Debug API Keys")
+st.sidebar.write(f"The Odds API Keys disponibles: {len(THE_ODDS_API_KEYS)}")
+for i, key in enumerate(THE_ODDS_API_KEYS, 1):
+    if key:
+        st.sidebar.success(f"✅ Key #{i}: Configurada")
+    else:
+        st.sidebar.error(f"❌ Key #{i}: Vacía")
+
+if API_FOOTBALL_KEY:
+    st.sidebar.success("✅ API-Football: Configurada")
+else:
+    st.sidebar.error("❌ API-Football: No configurada")
+
+st.sidebar.markdown("### 🔒 Filtros activos:")
+st.sidebar.markdown(f"- ✅ Cuotas entre **{min_odd}** y **{max_odd}**")
+st.sidebar.markdown(f"- ✅ {'Solo hoy' if only_today else 'Próximos 3 días'}")
 
 models = load_all_models()
 team_db = load_team_database()
@@ -648,21 +624,24 @@ if st.button("🔄 Escanear Todos los Mercados Ahora (MODO DEBUG)"):
     if fixtures:
         st.success(f"✅ ¡Escaneo completado! Se obtuvieron {len(fixtures)} eventos de la API.")
         
-        # Aquí va tu lógica de análisis original
         df_bets, stats = analyze_multi_market(models, fixtures, team_db, min_odd=min_odd, max_odd=max_odd, only_today=only_today)
         
-        tracker_register = StatsTracker()
-        registered = 0
+        # Debug info
+        st.write(f" Debug analyze_multi_market:")
+        st.write(f"  - Total fixtures procesados: {len(fixtures)}")
+        st.write(f"  - Value bets detectadas: {len(df_bets) if not df_bets.empty else 0}")
         if not df_bets.empty:
-            for _, row in df_bets.iterrows():
-                if tracker_register.register_pick(row.to_dict()):
-                    registered += 1
+            st.write(f"  - EV máximo: {df_bets['EV (%)'].max():.1f}%")
+            st.write(f"  - EV mínimo: {df_bets['EV (%)'].min():.1f}%")
+            st.write(f"  - EV promedio: {df_bets['EV (%)'].mean():.1f}%")
+            st.dataframe(df_bets[['Liga', 'Partido', 'Mercado', 'Cuota', 'EV (%)']].head(10))
         
+        # Temporal: sin tracker hasta configurar Supabase
         st.session_state['df_bets'] = df_bets
         st.session_state['stats'] = stats
         st.session_state['total_fixtures'] = len(fixtures)
-        st.session_state['registered_picks'] = registered
-        st.success(f"💾 {registered} picks registrados en el tracker.")
+        st.session_state['registered_picks'] = 0
+        st.success(f"💾 Datos guardados en sesión. (Tracker desactivado temporalmente)")
     else:
         st.error("❌ No se pudieron obtener datos. Revisa los mensajes de error arriba.")
 
@@ -679,7 +658,7 @@ if 'df_bets' in st.session_state:
     with col_f1:
         selected_market = st.selectbox("Filtrar por Mercado:", options=["Todos"] + sorted(df_filtered["Mercado"].unique().tolist()) if not df_filtered.empty else ["Todos"])
     with col_f2:
-        selected_league = st.selectbox("🏆 Filtrar por Liga:", options=["Todas"] + sorted(df_filtered["Liga"].unique().tolist()) if not df_filtered.empty else ["Todas"])
+        selected_league = st.selectbox(" Filtrar por Liga:", options=["Todas"] + sorted(df_filtered["Liga"].unique().tolist()) if not df_filtered.empty else ["Todas"])
     with col_f3:
         selected_source = st.selectbox("🔖 Filtrar por Fuente:", options=["Todas", "API-Football", "Cálculo"])
     with col_f4:
@@ -733,13 +712,13 @@ if 'df_bets' in st.session_state:
         if len(high_ev) > 0:
             st.success(f"🟢 **{len(high_ev)} apuestas de ALTO valor** (EV ≥ 10%). Prioridad máxima.")
         if len(medium_ev) > 0:
-            st.info(f"🟡 **{len(medium_ev)} apuestas de BUEN valor** (EV 5-10%). Recomendadas.")
+            st.info(f" **{len(medium_ev)} apuestas de BUEN valor** (EV 5-10%). Recomendadas.")
         if len(low_ev) > 0:
             st.warning(f"⚪ **{len(low_ev)} apuestas de valor moderado** (EV 2-5%). Opcionales.")
         
         avg_odd = df_filtered['Cuota'].mean()
         if avg_odd < 1.8:
-            st.markdown(f"📉 **Perfil de riesgo**: Conservador (cuota media {avg_odd:.2f})")
+            st.markdown(f" **Perfil de riesgo**: Conservador (cuota media {avg_odd:.2f})")
         elif avg_odd < 2.5:
             st.markdown(f"📊 **Perfil de riesgo**: Moderado (cuota media {avg_odd:.2f})")
         else:
@@ -792,7 +771,7 @@ if hist_stats['settled'] > 0:
     
     col6, col7, col8, col9 = st.columns(4)
     col6.metric("📊 Hit Rate", f"{hist_stats['hit_rate']:.1f}%")
-    col7.metric("💰 PnL", f"{hist_stats['pnl']:+.2f} u")
+    col7.metric(" PnL", f"{hist_stats['pnl']:+.2f} u")
     col8.metric("📈 Yield", f"{hist_stats['yield']:+.1f}%")
     if hist_stats['avg_ev_declared'] is not None:
         col9.metric("📉 EV medio (declarado)", f"{hist_stats['avg_ev_declared']:+.1f}%")
@@ -815,7 +794,7 @@ if hist_stats['settled'] > 0:
         df_markets = df_markets.sort_values('Total', ascending=False)
         st.dataframe(df_markets, use_container_width=True)
     
-    st.markdown("#### 🏆 Rendimiento por Liga")
+    st.markdown("####  Rendimiento por Liga")
     league_stats = tracker.get_stats_by_league()
     if league_stats:
         df_leagues = pd.DataFrame(league_stats).T
@@ -843,7 +822,7 @@ with st.expander("❓ Cómo leer estos gráficos - Guía rápida", expanded=Fals
     - La **línea gris discontinua en 0** es el punto de equilibrio: por encima ganas, por debajo pierdes.
     - La **pendiente** de la curva es tu yield real en el tiempo.
 
-    ### 🎯 Hit rate rodante (ventana de 10 picks)
+    ###  Hit rate rodante (ventana de 10 picks)
     - Muestra el % de aciertos de **los últimos 10 picks** en cada punto.
     - La **línea verde punteada** es tu hit rate global (media de todos los liquidados).
     - Picos y valles son rachas cortas: un valle puntual no es grave si la línea global se mantiene.
@@ -900,7 +879,7 @@ else:
                               name='PnL acumulado',
                               line=dict(color='#2ecc71', width=2.5)))
     fig1.add_hline(y=0, line_dash='dash', line_color='gray')
-    fig1.update_layout(title='💰 PnL acumulado (unidades, stake=1)',
+    fig1.update_layout(title=' PnL acumulado (unidades, stake=1)',
                        xaxis_title='Pick liquidado nº', yaxis_title='Unidades',
                        margin=dict(t=50, b=40))
     st.plotly_chart(fig1, use_container_width=True)
@@ -913,7 +892,7 @@ else:
                                   name='Hit rate rodante (10)',
                                   line=dict(color='#3498db', width=2)))
         fig2.add_hline(y=overall_hit, line_dash='dot', line_color='green')
-        fig2.update_layout(title=f'🎯 Hit rate rodante (global: {overall_hit:.1f}%)',
+        fig2.update_layout(title=f' Hit rate rodante (global: {overall_hit:.1f}%)',
                            xaxis_title='Pick liquidado nº', yaxis_title='%',
                            margin=dict(t=50, b=40))
         st.plotly_chart(fig2, use_container_width=True)
@@ -935,7 +914,7 @@ else:
 # CLV (v0.4-D Parte 2)
 # ==========================================
 st.markdown("---")
-st.subheader("🔻 Closing Line Value (CLV)")
+st.subheader(" Closing Line Value (CLV)")
 st.caption("¿Bates al mercado? CLV = (cuota tomada / cuota de cierre − 1). Positivo = encuentras valor antes que la casa.")
 
 clv_picks = [p for p in picks_hist if p.get('closing_odds') and p.get('cuota')]
@@ -961,7 +940,7 @@ else:
     c1, c2, c3 = st.columns(3)
     c1.metric("🔻 CLV medio", f"{avg_clv:+.1f}%")
     c2.metric("🎯 Bate al cierre", f"{beat_pct:.0f}% ({beat}/{len(clvs)})")
-    c3.metric("📊 Picks con cierre", len(clv_picks))
+    c3.metric(" Picks con cierre", len(clv_picks))
     
     if avg_clv > 0:
         st.success("✅ CLV positivo: estás encontrando valor antes que el mercado. Señal de rentabilidad a largo plazo.")
@@ -993,7 +972,7 @@ st.markdown("""
 # EXPORTAR DATOS PARA EL BOT DE TELEGRAM
 # ==========================================
 st.markdown("---")
-st.subheader("🤖 Exportar Estadísticas a GitHub")
+st.subheader(" Exportar Estadísticas a GitHub")
 st.caption("Genera un archivo `datos.json` en tu repositorio para que el bot de Telegram lo lea automáticamente.")
 
 if st.button("📤 Exportar Datos Ahora"):
