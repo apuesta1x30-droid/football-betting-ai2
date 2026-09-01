@@ -171,6 +171,21 @@ THE_ODDS_API_KEYS = [key for key in THE_ODDS_API_KEYS if key]
 API_FOOTBALL_KEY = st.secrets.get("API_FOOTBALL_KEY", os.getenv("API_FOOTBALL_KEY", ""))
 API_FOOTBALL_HEADERS = {'x-rapidapi-key': API_FOOTBALL_KEY, 'x-rapidapi-host': "v3.football.api-sports.io"}
 
+# Debug: Mostrar estado de las API keys
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔍 Debug API Keys")
+st.sidebar.write(f"The Odds API Keys disponibles: {len(THE_ODDS_API_KEYS)}")
+for i, key in enumerate(THE_ODDS_API_KEYS, 1):
+    if key:
+        st.sidebar.success(f"✅ Key #{i}: Configurada")
+    else:
+        st.sidebar.error(f"❌ Key #{i}: Vacía")
+
+if API_FOOTBALL_KEY:
+    st.sidebar.success("✅ API-Football: Configurada")
+else:
+    st.sidebar.error("❌ API-Football: No configurada")
+    
 # ==========================================
 # CARGA DE MODELOS Y DATOS
 # ==========================================
@@ -201,12 +216,17 @@ def load_team_database():
 # ==========================================
 @st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
 def scan_all_markets():
+    @st.cache_data(ttl=1800, show_spinner="Escaneando mercados...")
+def scan_all_markets():
     if not THE_ODDS_API_KEYS:
-        st.error("❌ No hay API keys de The Odds API configuradas en los Secrets de Streamlit.")
+        st.error("❌ No hay API keys de The Odds API configuradas.")
         return []
     
-    # Intentar con cada key hasta que una funcione
+    st.info(f" Intentando con {len(THE_ODDS_API_KEYS)} API keys disponibles...")
+    
     for i, api_key in enumerate(THE_ODDS_API_KEYS):
+        st.write(f"Probando Key #{i+1}...")
+        
         url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
         params = {
             "regions": "eu,us",
@@ -217,31 +237,26 @@ def scan_all_markets():
         
         try:
             response = requests.get(url, params=params, timeout=15)
+            st.write(f"Key #{i+1}: Status {response.status_code}")
             
-            # Si la respuesta es exitosa, devolver los datos inmediatamente
             if response.status_code == 200:
+                st.success(f"✅ Key #{i+1} funcionando correctamente")
                 return response.json()
             
-            # Detectar agotamiento de créditos (código 429 o mensaje de error específico)
-            if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text or "usage" in response.text.lower():
-                st.warning(f"⚠️ API Key #{i+1} agotada. Probando con la siguiente...")
+            if response.status_code == 429 or "OUT_OF_USAGE_CREDITS" in response.text:
+                st.warning(f"⚠️ Key #{i+1} agotada. Probando siguiente...")
                 continue
             
-            # Otros errores de la API
-            st.error(f"Error en The Odds API (Key #{i+1}): {response.status_code} - {response.text}")
+            st.error(f" Error Key #{i+1}: {response.text[:200]}")
             continue
             
-        except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Error de conexión con Key #{i+1}: {e}. Probando la siguiente...")
-            continue
         except Exception as e:
-            st.warning(f"⚠️ Error inesperado con Key #{i+1}: {e}. Probando la siguiente...")
+            st.warning(f"⚠️ Key #{i+1} error: {e}")
             continue
-            
-    # Si el bucle termina, significa que todas fallaron
-    st.error("❌ Todas las API keys de The Odds API están agotadas o han fallado. Revisa tus límites o añade más keys.")
+    
+    st.error("❌ Todas las keys de The Odds API fallaron. Usando API-Football como respaldo.")
     return []
-
+    
 def get_fixture_id_from_api_football(home_team, away_team, match_date):
     try:
         response = requests.get(
