@@ -325,7 +325,7 @@ def get_team_stats(team_name, team_db):
 # ==========================================
 # ANÁLISIS MULTI-MERCADO
 # ==========================================
-def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.3, max_odd=3.0, only_today=True):
+def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.4, max_odd=2.4, only_today=True):
     value_bets = []
     now = datetime.now(timezone.utc)
     stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
@@ -583,13 +583,13 @@ with st.expander("❓ ¿Qué es el Expected Value (EV)? - Guía completa", expan
     """)
 
 st.sidebar.header("⚙️ Configuración")
-ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_value=20.0, value=5.0, step=1.0)
+ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_value=20.0, value=2.0, step=1.0)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader(" Filtro de Cuotas")
 col_odd1, col_odd2 = st.sidebar.columns(2)
-min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.3, step=0.1)
-max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=3.0, step=0.1)
+min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.4, step=0.1)
+max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=2.4, step=0.1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Filtro de Fecha")
