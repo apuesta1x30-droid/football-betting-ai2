@@ -29,10 +29,11 @@ jobs:
       - name: Build team_stats_db.csv
         run: python build_team_db.py
 
-      - name: Commit updated team_stats_db.csv
+      - name: Commit and push updated team_stats_db.csv
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add team_stats_db.csv
           git diff --cached --quiet || git commit -m "Update team_stats_db from football-data"
+          git pull --rebase origin main || git pull --no-rebase origin main
           git push
