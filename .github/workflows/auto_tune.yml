@@ -2,7 +2,7 @@ name: Auto Tune
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # diario 06:00 UTC, antes del escaneo de las 04:15+2h
+    - cron: '0 4 * * *'    # 04:00 UTC (movido de 06:00)
   workflow_dispatch:
 
 jobs:
