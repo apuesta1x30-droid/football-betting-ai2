@@ -2,7 +2,8 @@ name: Settle Pending Picks
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # Diario 12:00 UTC
+    - cron: '30 3 * * *'   # 03:30 UTC (NUEVO)
+    - cron: '0 12 * * *'   # 12:00 UTC (existente)
   workflow_dispatch:
 
 jobs:
