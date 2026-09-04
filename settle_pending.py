@@ -25,7 +25,10 @@ ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/{}/scoreboard"
 
 # Mapa: patrón (liga normalizada de The Odds API) → slug ESPN
 LEAGUE_MAP = [
-    # Corea ANTES que 'league 1' de Inglaterra
+    # Países con "Premier League" propia ANTES que el genérico 'premier league'
+    ('russia', 'rus.1'),
+    ('russian', 'rus.1'),
+    ('ukraine', 'ukr.1'),
     ('k league', 'kor.1'),
     ('south korea', 'kor.1'),
     # Brasil ANTES que 'serie a/b' de Italia
@@ -315,18 +318,24 @@ def main():
             continue
         home, away = partido.split(' vs ', 1)
 
-        slug = league_to_slug(pick.get('liga', ''))
-        if not slug:
-            unmapped.add(pick.get('liga', '?'))
-            skipped += 1
-            continue
-
         date_str, d = parse_pick_date(pick.get('hora', ''))
         if not date_str:
             skipped += 1
             continue
         if d >= datetime.now(timezone.utc).date():
             future += 1
+            continue
+        aged = (datetime.now(timezone.utc).date() - d).days
+
+        slug = league_to_slug(pick.get('liga', ''))
+        if not slug:
+            unmapped.add(pick.get('liga', '?'))
+            if aged > 7:
+                tracker.settle_pick(pick['id'], 'void')
+                void += 1
+                logger.info(f"➖ {partido}: liga sin mapear y >7 días → VOID")
+            else:
+                skipped += 1
             continue
 
         m = None
@@ -339,8 +348,13 @@ def main():
                     logger.info(f"📅 {partido}: encontrado con desfase de {delta:+d} día(s)")
                 break
         if not m:
-            not_found += 1
-            logger.info(f"⏳ {partido} ({slug} · {date_str}): sin coincidencia")
+            if aged > 7:
+                tracker.settle_pick(pick['id'], 'void')
+                void += 1
+                logger.info(f"➖ {partido}: sin resultado en ESPN y >7 días → VOID")
+            else:
+                not_found += 1
+                logger.info(f"⏳ {partido} ({slug} · {date_str}): sin coincidencia")
             continue
 
         eh, ea, sh, sa, completed = m
