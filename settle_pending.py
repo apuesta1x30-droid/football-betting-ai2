@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Liquidación masiva de picks pendientes con la API pública de ESPN.
-Gratis, sin key. 1 request por (liga, fecha).
-Ligas no mapeadas o sin cobertura quedan pendientes.
+Liquidación masiva de picks pendientes con múltiples fuentes:
+1º ESPN (gratis, amplio)
+2º football-data.co.uk (gratis, ligas UK/ESC)
+3º TheSportsDB (gratis, ligas asiáticas/exóticas)
+4º VOID automático a los 7 días (nunca atascos)
 """
 import os
 import sys
@@ -27,11 +29,13 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/{}/scoreboard"
 
 # Mapa: patrón (liga normalizada de The Odds API) → slug ESPN
+# RUSIA ANTES que 'premier league' genérico
 LEAGUE_MAP = [
     # Países con "Premier League" propia ANTES que el genérico 'premier league'
     ('russia', 'rus.1'),
     ('russian', 'rus.1'),
     ('ukraine', 'ukr.1'),
+    # Corea ANTES que 'league 1' de Inglaterra
     ('k league', 'kor.1'),
     ('south korea', 'kor.1'),
     # Brasil ANTES que 'serie a/b' de Italia
@@ -92,7 +96,6 @@ LEAGUE_MAP = [
     # Resto Europa
     ('turkey', 'tur.1'),
     ('greece', 'gre.1'),
-    ('russia', 'rus.1'),
     ('ekstraklasa', 'pol.ekstraklasa'),
     ('poland', 'pol.ekstraklasa'),
     ('czech', 'cze.1'),
@@ -100,7 +103,6 @@ LEAGUE_MAP = [
     ('estonia', 'est.1'),
     ('romania', 'rou.1'),
     ('hungary', 'hun.1'),
-    ('ukraine', 'ukr.1'),
     ('serbia', 'srb.1'),
     ('bulgaria', 'bul.1'),
     # Asia / Oceanía
@@ -133,6 +135,8 @@ LEAGUE_MAP = [
 TEAM_ALIASES = {
     'hearts': 'heart of midlothian',
 }
+
+
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -168,7 +172,73 @@ def league_to_slug(liga):
         if pattern in nl:
             return slug
     return None
-    # Fuente de respaldo: football-data.co.uk (ligas que ESPN no cubre)
+
+
+# ==========================================
+# FUENTE 1: ESPN
+# ==========================================
+def get_scoreboard(slug, date_str, cache):
+    key = (slug, date_str)
+    if key in cache:
+        return cache[key]
+    events = []
+    try:
+        r = requests.get(ESPN.format(slug),
+                         params={"dates": date_str.replace('-', '')}, timeout=15)
+        if r.status_code == 200:
+            events = r.json().get("events") or []
+            logger.info(f"📡 ESPN {slug} · {date_str}: {len(events)} eventos")
+        else:
+            logger.warning(f"⚠️ ESPN {slug} · {date_str}: HTTP {r.status_code}")
+    except Exception as e:
+        logger.error(f"❌ ESPN {slug} · {date_str}: {e}")
+    cache[key] = events
+    time.sleep(0.6)
+    return events
+
+
+def extract_match(ev):
+    """Devuelve (home, away, score_home, score_away, completed) o None."""
+    try:
+        comp = ev["competitions"][0]
+        home = away = None
+        for c in comp["competitors"]:
+            team_name = (c.get("team", {}).get("displayName")
+                         or c.get("team", {}).get("name") or "")
+            score = c.get("score")
+            if c.get("homeAway") == "home":
+                home = (team_name, score)
+            elif c.get("homeAway") == "away":
+                away = (team_name, score)
+        completed = ev.get("status", {}).get("type", {}).get("completed", False)
+        if not home or not away:
+            return None
+        return home[0], away[0], home[1], away[1], completed
+    except Exception:
+        return None
+
+
+def tnorm(s):
+    n = norm(s)
+    return TEAM_ALIASES.get(n, n)
+
+
+def find_in_events(events, home, away):
+    nh, na = tnorm(home), tnorm(away)
+    best, best_score = None, 0.0
+    for ev in events:
+        m = extract_match(ev)
+        if not m:
+            continue
+        s = sim(nh, tnorm(m[0])) + sim(na, tnorm(m[1]))
+        if s > best_score:
+            best_score, best = s, m
+    return best if best_score >= 1.6 else None
+
+
+# ==========================================
+# FUENTE 2: football-data.co.uk
+# ==========================================
 FD_LEAGUE_MAP = [
     ('league 2', 'E3'),
     ('league two', 'E3'),
@@ -236,7 +306,11 @@ def find_in_fd(rows, home, away, d):
         return int(best['FTHG']), int(best['FTAG'])
     except Exception:
         return None
-    # Fuente de respaldo 2: TheSportsDB (ligas asiáticas/exóticas)
+
+
+# ==========================================
+# FUENTE 3: TheSportsDB
+# ==========================================
 TSD_API = "https://www.thesportsdb.com/api/v1/json/3/searchevents.php"
 
 def find_in_thesportsdb(home, away, d, cache):
@@ -314,65 +388,9 @@ def find_in_thesportsdb(home, away, d, cache):
         return None
 
 
-def get_scoreboard(slug, date_str, cache):
-    key = (slug, date_str)
-    if key in cache:
-        return cache[key]
-    events = []
-    try:
-        r = requests.get(ESPN.format(slug),
-                         params={"dates": date_str.replace('-', '')}, timeout=15)
-        if r.status_code == 200:
-            events = r.json().get("events") or []
-            logger.info(f"📡 ESPN {slug} · {date_str}: {len(events)} eventos")
-        else:
-            logger.warning(f"⚠️ ESPN {slug} · {date_str}: HTTP {r.status_code}")
-    except Exception as e:
-        logger.error(f"❌ ESPN {slug} · {date_str}: {e}")
-    cache[key] = events
-    time.sleep(0.6)
-    return events
-
-
-def extract_match(ev):
-    """Devuelve (home, away, score_home, score_away, completed) o None."""
-    try:
-        comp = ev["competitions"][0]
-        home = away = None
-        for c in comp["competitors"]:
-            team_name = (c.get("team", {}).get("displayName")
-                         or c.get("team", {}).get("name") or "")
-            score = c.get("score")
-            if c.get("homeAway") == "home":
-                home = (team_name, score)
-            elif c.get("homeAway") == "away":
-                away = (team_name, score)
-        completed = ev.get("status", {}).get("type", {}).get("completed", False)
-        if not home or not away:
-            return None
-        return home[0], away[0], home[1], away[1], completed
-    except Exception:
-        return None
-
-
-def tnorm(s):
-    n = norm(s)
-    return TEAM_ALIASES.get(n, n)
-
-
-def find_in_events(events, home, away):
-    nh, na = tnorm(home), tnorm(away)
-    best, best_score = None, 0.0
-    for ev in events:
-        m = extract_match(ev)
-        if not m:
-            continue
-        s = sim(nh, tnorm(m[0])) + sim(na, tnorm(m[1]))
-        if s > best_score:
-            best_score, best = s, m
-    return best if best_score >= 1.6 else None
-
-
+# ==========================================
+# EVALUACIÓN Y LÓGICA PRINCIPAL
+# ==========================================
 def parse_pick_date(hora):
     try:
         date_part = hora.split()[0]
@@ -498,6 +516,7 @@ def main():
                     if delta != 0:
                         logger.info(f"📅 {partido}: encontrado con desfase de {delta:+d} día(s)")
                     break
+        
         if not m and fd_code:
             fd_res = find_in_fd(get_fd_rows(fd_code, fd_cache), home, away, d)
             if fd_res is not None:
@@ -535,6 +554,8 @@ def main():
                         void += 1
                         logger.info(f"➖ {partido}: VOID [TheSportsDB]")
                     continue
+
+        if not m:
             if aged > 7:
                 tracker.settle_pick(pick['id'], 'void')
                 void += 1
