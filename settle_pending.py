@@ -320,9 +320,10 @@ def find_in_thesportsdb(home, away, d, cache):
     
     nh, na = tnorm(home), tnorm(away)
     
-    # Buscar por nombres de equipos
-    query = f"{nh}_vs_{na}"
+    # Buscar por nombres ORIGINALES (TheSportsDB distingue mayúsculas)
+    query = f"{home}_vs_{away}"
     params = {"e": query}
+    logger.info(f"🌐 TheSportsDB buscando: {query}")
     
     try:
         r = requests.get(TSD_API, params=params, timeout=15)
