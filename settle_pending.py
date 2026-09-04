@@ -337,7 +337,7 @@ def find_in_thesportsdb(home, away, d, cache):
             return None
         
         data = r.json()
-        events = data.get("events") or []
+        events = data.get("event") or []
         logger.info(f"🌐 TheSportsDB devolvió {len(events)} eventos")
         
         if not events:
