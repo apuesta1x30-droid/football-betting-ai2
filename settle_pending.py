@@ -9,6 +9,7 @@ import sys
 import time
 import csv
 import io
+import json
 import logging
 import unicodedata
 import requests
@@ -235,6 +236,82 @@ def find_in_fd(rows, home, away, d):
         return int(best['FTHG']), int(best['FTAG'])
     except Exception:
         return None
+    # Fuente de respaldo 2: TheSportsDB (ligas asiáticas/exóticas)
+TSD_API = "https://www.thesportsdb.com/api/v1/json/3/searchevents.php"
+
+def find_in_thesportsdb(home, away, d, cache):
+    key = (home, away, d.isoformat())
+    if key in cache:
+        return cache[key]
+    
+    nh, na = tnorm(home), tnorm(away)
+    
+    # Buscar por nombres de equipos
+    query = f"{nh}_vs_{na}"
+    params = {"e": query}
+    
+    try:
+        r = requests.get(TSD_API, params=params, timeout=15)
+        if r.status_code != 200:
+            cache[key] = None
+            return None
+        
+        data = r.json()
+        events = data.get("events") or []
+        
+        best, best_score = None, 0.0
+        for ev in events:
+            ev_date = ev.get("dateEvent")
+            if not ev_date:
+                continue
+            try:
+                ev_d = datetime.strptime(ev_date, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            
+            if abs((ev_d - d).days) > 2:
+                continue
+            
+            ev_home = ev.get("strHomeTeam", "")
+            ev_away = ev.get("strAwayTeam", "")
+            
+            # TheSportsDB a veces invierte home/away
+            s1 = sim(nh, tnorm(ev_home)) + sim(na, tnorm(ev_away))
+            s2 = sim(nh, tnorm(ev_away)) + sim(na, tnorm(ev_home))
+            s = max(s1, s2)
+            
+            if s > best_score:
+                best_score = s
+                best = ev
+        
+        if best is None or best_score < 1.6:
+            cache[key] = None
+            return None
+        
+        # Verificar que el partido terminó
+        status = best.get("strStatus", "")
+        if status not in ("FT", "AET", "AP"):
+            cache[key] = None
+            return None
+        
+        try:
+            hg = int(best.get("intHomeScore") or 0)
+            ag = int(best.get("intAwayScore") or 0)
+            
+            # Si el pick tenía home/away invertidos, invertir marcador
+            if s2 > s1:
+                hg, ag = ag, hg
+            
+            cache[key] = (hg, ag)
+            return (hg, ag)
+        except Exception:
+            cache[key] = None
+            return None
+            
+    except Exception as e:
+        logger.warning(f"⚠️ TheSportsDB: {e}")
+        cache[key] = None
+        return None
 
 
 def get_scoreboard(slug, date_str, cache):
@@ -379,6 +456,7 @@ def main():
 
     cache = {}
     fd_cache = {}
+    tsd_cache = {}
     unmapped = set()
     settled = won = lost = void = skipped = not_found = future = 0
 
@@ -438,7 +516,25 @@ def main():
                         void += 1
                         logger.info(f"➖ {partido}: VOID [football-data]")
                     continue
+        
         if not m:
+            tsd_res = find_in_thesportsdb(home, away, d, tsd_cache)
+            if tsd_res is not None:
+                hg, ag = tsd_res
+                status = evaluate_pick(pick, hg, ag)
+                if status is not None:
+                    tracker.settle_pick(pick['id'], status)
+                    settled += 1
+                    if status == 'won':
+                        won += 1
+                        logger.info(f"✅ {partido}: WON ({hg}-{ag}) [TheSportsDB]")
+                    elif status == 'lost':
+                        lost += 1
+                        logger.info(f"❌ {partido}: LOST ({hg}-{ag}) [TheSportsDB]")
+                    else:
+                        void += 1
+                        logger.info(f"➖ {partido}: VOID [TheSportsDB]")
+                    continue
             if aged > 7:
                 tracker.settle_pick(pick['id'], 'void')
                 void += 1
