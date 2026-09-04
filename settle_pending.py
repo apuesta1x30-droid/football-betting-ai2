@@ -318,21 +318,32 @@ def find_in_thesportsdb(home, away, d, cache):
     if key in cache:
         return cache[key]
     
-    nh, na = tnorm(home), tnorm(away)
-    
     # Buscar por nombres ORIGINALES (TheSportsDB distingue mayúsculas)
     query = f"{home}_vs_{away}"
     params = {"e": query}
     logger.info(f"🌐 TheSportsDB buscando: {query}")
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
     try:
-        r = requests.get(TSD_API, params=params, timeout=15)
+        r = requests.get(TSD_API, params=params, headers=headers, timeout=15)
+        logger.info(f"🌐 TheSportsDB status: {r.status_code}, length: {len(r.text)}")
+        
         if r.status_code != 200:
+            logger.warning(f"⚠️ TheSportsDB HTTP {r.status_code}")
             cache[key] = None
             return None
         
         data = r.json()
         events = data.get("events") or []
+        logger.info(f"🌐 TheSportsDB devolvió {len(events)} eventos")
+        
+        if not events:
+            logger.info(f"🌐 TheSportsDB: sin eventos para '{query}'")
+            cache[key] = None
+            return None
         
         best, best_score = None, 0.0
         for ev in events:
@@ -351,8 +362,8 @@ def find_in_thesportsdb(home, away, d, cache):
             ev_away = ev.get("strAwayTeam", "")
             
             # TheSportsDB a veces invierte home/away
-            s1 = sim(nh, tnorm(ev_home)) + sim(na, tnorm(ev_away))
-            s2 = sim(nh, tnorm(ev_away)) + sim(na, tnorm(ev_home))
+            s1 = sim(home.lower(), ev_home.lower()) + sim(away.lower(), ev_away.lower())
+            s2 = sim(home.lower(), ev_away.lower()) + sim(away.lower(), ev_home.lower())
             s = max(s1, s2)
             
             if s > best_score:
@@ -360,12 +371,14 @@ def find_in_thesportsdb(home, away, d, cache):
                 best = ev
         
         if best is None or best_score < 1.6:
+            logger.info(f"🌐 TheSportsDB: mejor score {best_score:.2f} < 1.6")
             cache[key] = None
             return None
         
         # Verificar que el partido terminó
         status = best.get("strStatus", "")
         if status not in ("FT", "AET", "AP"):
+            logger.info(f"🌐 TheSportsDB: partido no terminado (status: {status})")
             cache[key] = None
             return None
         
@@ -377,17 +390,18 @@ def find_in_thesportsdb(home, away, d, cache):
             if s2 > s1:
                 hg, ag = ag, hg
             
+            logger.info(f"✅ TheSportsDB: encontrado {hg}-{ag}")
             cache[key] = (hg, ag)
             return (hg, ag)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ TheSportsDB parse error: {e}")
             cache[key] = None
             return None
             
     except Exception as e:
-        logger.warning(f"⚠️ TheSportsDB: {e}")
+        logger.warning(f"⚠️ TheSportsDB exception: {e}")
         cache[key] = None
         return None
-
 
 # ==========================================
 # EVALUACIÓN Y LÓGICA PRINCIPAL
