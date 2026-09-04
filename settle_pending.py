@@ -7,6 +7,8 @@ Ligas no mapeadas o sin cobertura quedan pendientes.
 import os
 import sys
 import time
+import csv
+import io
 import logging
 import unicodedata
 import requests
@@ -165,6 +167,74 @@ def league_to_slug(liga):
         if pattern in nl:
             return slug
     return None
+    # Fuente de respaldo: football-data.co.uk (ligas que ESPN no cubre)
+FD_LEAGUE_MAP = [
+    ('league 2', 'E3'),
+    ('league two', 'E3'),
+    ('league 1', 'E2'),
+    ('league one', 'E2'),
+    ('championship', 'E1'),
+    ('scotland championship', 'SC1'),
+]
+
+def league_to_fd(liga):
+    nl = norm(liga)
+    for pattern, code in FD_LEAGUE_MAP:
+        if pattern in nl:
+            return code
+    return None
+
+def fd_seasons():
+    now = datetime.now(timezone.utc)
+    y, m = now.year, now.month
+    start = y % 100 if m >= 7 else (y - 1) % 100
+    cur = f"{start:02d}{(start + 1) % 100:02d}"
+    prev = f"{(start - 1) % 100:02d}{start:02d}"
+    return [cur, prev]
+
+def get_fd_rows(code, cache):
+    if code in cache:
+        return cache[code]
+    rows = []
+    for season in fd_seasons():
+        url = f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
+        try:
+            r = requests.get(url, timeout=20)
+            if r.status_code != 200:
+                continue
+            for row in csv.DictReader(io.StringIO(r.text)):
+                if row.get('Date') and row.get('HomeTeam') and row.get('AwayTeam'):
+                    rows.append(row)
+        except Exception as e:
+            logger.warning(f"⚠️ football-data {season}/{code}: {e}")
+    cache[code] = rows
+    time.sleep(0.5)
+    return rows
+
+def parse_fd_date(s):
+    for fmt in ('%d/%m/%Y', '%d/%m/%y'):
+        try:
+            return datetime.strptime(s.strip(), fmt).date()
+        except Exception:
+            continue
+    return None
+
+def find_in_fd(rows, home, away, d):
+    nh, na = tnorm(home), tnorm(away)
+    best, best_score = None, 0.0
+    for row in rows:
+        rd = parse_fd_date(row['Date'])
+        if rd is None or abs((rd - d).days) > 2:
+            continue
+        s = sim(nh, tnorm(row['HomeTeam'])) + sim(na, tnorm(row['AwayTeam']))
+        if s > best_score:
+            best_score, best = s, row
+    if best is None or best_score < 1.6:
+        return None
+    try:
+        return int(best['FTHG']), int(best['FTAG'])
+    except Exception:
+        return None
 
 
 def get_scoreboard(slug, date_str, cache):
@@ -308,6 +378,7 @@ def main():
     logger.info(f"📋 {len(pending)} picks pendientes")
 
     cache = {}
+    fd_cache = {}
     unmapped = set()
     settled = won = lost = void = skipped = not_found = future = 0
 
@@ -328,7 +399,8 @@ def main():
         aged = (datetime.now(timezone.utc).date() - d).days
 
         slug = league_to_slug(pick.get('liga', ''))
-        if not slug:
+        fd_code = league_to_fd(pick.get('liga', ''))
+        if not slug and not fd_code:
             unmapped.add(pick.get('liga', '?'))
             if aged > 7:
                 tracker.settle_pick(pick['id'], 'void')
@@ -339,14 +411,33 @@ def main():
             continue
 
         m = None
-        for delta in (0, -1, 1):
-            d2 = d + timedelta(days=delta)
-            events = get_scoreboard(slug, d2.isoformat(), cache)
-            m = find_in_events(events, home, away)
-            if m:
-                if delta != 0:
-                    logger.info(f"📅 {partido}: encontrado con desfase de {delta:+d} día(s)")
-                break
+        if slug:
+            for delta in (0, -1, 1):
+                d2 = d + timedelta(days=delta)
+                events = get_scoreboard(slug, d2.isoformat(), cache)
+                m = find_in_events(events, home, away)
+                if m:
+                    if delta != 0:
+                        logger.info(f"📅 {partido}: encontrado con desfase de {delta:+d} día(s)")
+                    break
+        if not m and fd_code:
+            fd_res = find_in_fd(get_fd_rows(fd_code, fd_cache), home, away, d)
+            if fd_res is not None:
+                hg, ag = fd_res
+                status = evaluate_pick(pick, hg, ag)
+                if status is not None:
+                    tracker.settle_pick(pick['id'], status)
+                    settled += 1
+                    if status == 'won':
+                        won += 1
+                        logger.info(f"✅ {partido}: WON ({hg}-{ag}) [football-data]")
+                    elif status == 'lost':
+                        lost += 1
+                        logger.info(f"❌ {partido}: LOST ({hg}-{ag}) [football-data]")
+                    else:
+                        void += 1
+                        logger.info(f"➖ {partido}: VOID [football-data]")
+                    continue
         if not m:
             if aged > 7:
                 tracker.settle_pick(pick['id'], 'void')
