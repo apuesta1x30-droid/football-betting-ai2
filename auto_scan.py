@@ -73,29 +73,49 @@ def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
             a['pnl'] -= 1.0
     return {lg for lg, a in agg.items() if a['n'] >= min_n and a['pnl'] <= min_pnl}
 
-def compute_recalib(tracker, min_n=50):
-    """Capa B: recalibración empírica (mínimos cuadrados) de la Prob. IA.
+def compute_recalib(tracker, min_n=30, weeks_back=4):
+    """Capa B: recalibración empírica usando solo picks recientes.
+    Evita contaminación por picks antiguos inflados.
     Devuelve {'alpha', 'beta', 'n'} o None si hay pocos liquidados."""
     if not tracker or not tracker.enabled:
         return None
+    
+    cutoff_date = datetime.now(timezone.utc) - timedelta(weeks=weeks_back)
     xs, ys = [], []
+    
     for p in tracker.get_all_picks():
-        if p.get('status') in ('won', 'lost') and p.get('prob_ia') is not None:
-            try:
-                xs.append(float(p['prob_ia']))
-                ys.append(1.0 if p['status'] == 'won' else 0.0)
-            except Exception:
+        if p.get('status') not in ('won', 'lost') or p.get('prob_ia') is None:
+            continue
+        
+        # Filtrar por fecha (timestamp del pick)
+        try:
+            pick_time = datetime.fromisoformat(p.get('timestamp', '').replace('Z', '+00:00'))
+            if pick_time < cutoff_date:
                 continue
+        except Exception:
+            continue
+        
+        try:
+            xs.append(float(p['prob_ia']))
+            ys.append(1.0 if p['status'] == 'won' else 0.0)
+        except Exception:
+            continue
+    
     n = len(xs)
     if n < min_n:
+        logger.info(f"🧮 Capa B: insuficientes picks recientes ({n}/{min_n} en últimas {weeks_back} semanas)")
         return None
+    
     mx = sum(xs) / n
     my = sum(ys) / n
     sxx = sum((x - mx) ** 2 for x in xs)
     if sxx <= 1e-9:
         return None
+    
     beta = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
     alpha = my - beta * mx
+    
+    logger.info(f"🧮 Capa B (últimas {weeks_back} semanas): p_corr = {alpha:.3f} + {beta:.3f}·p (n={n})")
     return {'alpha': alpha, 'beta': beta, 'n': n}
 
 def send_telegram_message(message, parse_mode="HTML"):
