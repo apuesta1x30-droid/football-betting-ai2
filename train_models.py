@@ -173,16 +173,37 @@ def save_models(models):
     logger.info("💾 Modelos guardados (model_*.pkl)")
 
 
+def _lin_recalib(pairs):
+    """Mínimos cuadrados p -> y sobre lista de (p, y). Devuelve (alpha, beta)."""
+    n = len(pairs)
+    if n < 10:
+        return 0.0, 1.0
+    mx = sum(p for p, _ in pairs) / n
+    my = sum(y for _, y in pairs) / n
+    sxx = sum((p - mx) ** 2 for p, _ in pairs)
+    if sxx <= 1e-9:
+        return 0.0, 1.0
+    beta = sum((p - mx) * (y - my) for p, y in pairs) / sxx
+    return my - beta * mx, beta
+
+
+def _apply_recalib(p, alpha, beta):
+    return max(0.03, min(0.97, alpha + beta * p))
+
+
 def validate_against_picks(models):
-    """Gap ANTIGUO vs gap NUEVO sobre tus picks reales. Devuelve bool o None."""
+    """Compara ANTIGUO vs NUEVO sobre picks reales SIMULANDO PRODUCCIÓN:
+    prob cruda + Capa B (recalibración lineal) ajustada FUERA DE MUESTRA
+    (cross-fit 4 folds). El gap crudo en picks siempre es positivo por sesgo
+    de selección; lo que decide es el gap post-recalibración y el Brier."""
     from stats_tracker import StatsTracker
     tr = StatsTracker()
     if not tr.enabled:
-        logger.warning("Supabase no configurado: sin gate de picks reales")
+        logger.warning("Supabase no configurado: sin gate de picks")
         return None
-    old, new = [], []
+    rows = []
     for p in tr.get_all_picks():
-        if p.get('status') not in ('won', 'lost'):
+        if p.get('status') not in ('won', 'lost') or p.get('prob_ia') is None:
             continue
         f = p.get('features') or p.get('Features')
         if not f:
@@ -215,24 +236,41 @@ def validate_against_picks(models):
                 pred = probs[2]
         if pred is None:
             continue
-        yv = 1.0 if p['status'] == 'won' else 0.0
-        new.append((float(pred), yv))
-        if p.get('prob_ia') is not None:
-            old.append((float(p['prob_ia']), yv))
-    if not new:
-        logger.warning("Sin picks con features guardadas: sin gate de picks reales")
+        rows.append((float(p['prob_ia']), float(pred),
+                     1.0 if p['status'] == 'won' else 0.0))
+    n = len(rows)
+    if n < 40:
+        logger.warning(f"Picks con features insuficientes ({n}): sin gate de picks")
         return None
-    g_new = (sum(x[0] for x in new) / len(new) - sum(x[1] for x in new) / len(new)) * 100
-    b_new = sum((x[0] - x[1]) ** 2 for x in new) / len(new)
-    logger.info(f"🎯 VALIDACIÓN SOBRE {len(new)} PICKS REALES")
-    if old:
-        g_old = (sum(x[0] for x in old) / len(old) - sum(x[1] for x in old) / len(old)) * 100
-        b_old = sum((x[0] - x[1]) ** 2 for x in old) / len(old)
-        logger.info(f"   Modelo ANTIGUO: gap {g_old:+.1f} pp · Brier {b_old:.3f}")
-        ok = abs(g_new) <= GATE_PP and b_new < b_old
-    else:
-        ok = abs(g_new) <= GATE_PP
-    logger.info(f"   Modelo NUEVO:   gap {g_new:+.1f} pp · Brier {b_new:.3f}")
+
+    old_raw = [r[0] for r in rows]
+    new_raw = [r[1] for r in rows]
+    ys = [r[2] for r in rows]
+    g_old_raw = (sum(old_raw) / n - sum(ys) / n) * 100
+    g_new_raw = (sum(new_raw) / n - sum(ys) / n) * 100
+
+    # Cross-fit 4 folds: la Capa B de cada fold se ajusta SIN ese fold
+    folds = 4
+    old_recal = [0.0] * n
+    new_recal = [0.0] * n
+    for k in range(folds):
+        tr_idx = [i for i in range(n) if i % folds != k]
+        te_idx = [i for i in range(n) if i % folds == k]
+        a_o, b_o = _lin_recalib([(old_raw[i], ys[i]) for i in tr_idx])
+        a_n, b_n = _lin_recalib([(new_raw[i], ys[i]) for i in tr_idx])
+        for i in te_idx:
+            old_recal[i] = _apply_recalib(old_raw[i], a_o, b_o)
+            new_recal[i] = _apply_recalib(new_raw[i], a_n, b_n)
+
+    g_old = (sum(old_recal) / n - sum(ys) / n) * 100
+    g_new = (sum(new_recal) / n - sum(ys) / n) * 100
+    b_old = sum((old_recal[i] - ys[i]) ** 2 for i in range(n)) / n
+    b_new = sum((new_recal[i] - ys[i]) ** 2 for i in range(n)) / n
+
+    logger.info(f"🎯 VALIDACIÓN SOBRE {n} PICKS REALES (crudo → post-Capa B fuera de muestra)")
+    logger.info(f"   ANTIGUO: crudo {g_old_raw:+.1f} pp → recalib {g_old:+.1f} pp · Brier {b_old:.3f}")
+    logger.info(f"   NUEVO:   crudo {g_new_raw:+.1f} pp → recalib {g_new:+.1f} pp · Brier {b_new:.3f}")
+    ok = abs(g_new) <= GATE_PP and b_new < b_old
     logger.info("   ✅ Gate de picks: OK" if ok else "   ❌ Gate de picks: FALLA")
     return ok
 
