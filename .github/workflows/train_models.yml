@@ -1,0 +1,46 @@
+name: Train Models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL_FB: ${{ secrets.SUPABASE_URL_FB }}
+      SUPABASE_KEY_FB: ${{ secrets.SUPABASE_KEY_FB }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Dependencias
+        run: pip install -r requirements.txt
+      - name: Entrenar y validar
+        run: python train_models.py --validate
+      - name: Subir artefactos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelos-entrenados
+          path: |
+            model_*.pkl
+            deploy_ok.txt
+      - name: Commit de modelos si validación OK
+        run: |
+          if [ -f deploy_ok.txt ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git add model_*.pkl
+            git commit -m "🤖 Modelos re-entrenados y validados (gates OK)"
+            git pull --rebase origin main
+            git push
+            echo "✅ Modelos commiteados a main"
+          else
+            echo "❌ Validación no superada: los modelos NO se commitean"
+          fi
