@@ -6,10 +6,11 @@ y escribe en Supabase (tabla meta, clave 'auto_tune') la configuración que
 auto_scan debe aplicar: umbral de EV de notificación y fracción Kelly.
 
 Reglas:
-- gap > +10 pp  → sobreestima  → sube EV mínimo, baja Kelly (1/8)
-- gap +5..+10   → leve         → EV 11%, Kelly 1/6
-- gap -5..+5    → calibrado    → EV 10%, Kelly 1/4 (default)
-- gap < -5      → conservador  → baja EV mínimo, Kelly 1/2
+- gap > +25 pp  → sobreestima mucho → EV 15%, Kelly 1/8
+- gap > +10 pp  → sobreestima       → EV 12%, Kelly 1/8
+- gap +5..+10   → leve              → EV 11%, Kelly 1/6
+- gap -5..+5    → calibrado         → EV 10%, Kelly 1/4 (default)
+- gap < -5      → conservador       → EV 6%,  Kelly 1/2
 
 Avisa por Telegram cuando cambia la configuración.
 Si se ejecuta MANUALMENTE (Actions → Run workflow), envía siempre el estado
@@ -72,7 +73,7 @@ def main():
         logger.error("❌ Supabase no configurado")
         return 1
 
-        all_picks = tracker.get_all_picks()
+    all_picks = tracker.get_all_picks()
     s = compute_for(all_picks)
 
     # 🧪 Gap reciente: solo picks GENERADOS en los últimos 14 días
@@ -129,9 +130,23 @@ def main():
                 f"(gap {gap:+.1f} pp, n={s['settled']})")
 
     if changed or manual:
+        # Detectar transición específica: sale del modo seguridad (gap >+10 → ≤+10)
+        saliendo_de_seguridad = (
+            changed
+            and prev.get('ev_notify', 10) == 12.0
+            and new_cfg['ev_notify'] < 12.0
+        )
+
         if not changed:
             cabecera = "🤖 <b>ESTADO DEL AUTO-AJUSTE</b> (sin cambios)"
             lectura = "✅ Sin cambios: se mantiene la configuración actual"
+        elif saliendo_de_seguridad:
+            cabecera = "🟢 <b>MODO SEGURIDAD DESACTIVADO</b>"
+            lectura = (
+                "El gap ha bajado por debajo de +10 pp.\n"
+                "Vuelven las apuestas con stake.\n"
+                "Si el gap vuelve a subir de +10, el sistema se protege solo."
+            )
         elif new_cfg['ev_notify'] > prev.get('ev_notify', 10):
             cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "📈 IA más afinada: subo el listón de calidad y protejo banca"
@@ -142,7 +157,7 @@ def main():
             cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "🔄 Ajuste de Kelly según calibración detectada"
 
-                if sr and sr.get('gap') is not None and sr['settled'] >= 5:
+        if sr and sr.get('gap') is not None and sr['settled'] >= 5:
             linea_reciente = (f"🧪 Gap reciente (14 días, n={sr['settled']}): "
                               f"<b>{sr['gap']:+.1f} pp</b>\n")
         else:
