@@ -375,7 +375,7 @@ def scan_value_bets():
                     name = outcome["name"]
                     point = outcome.get("point", 2.5)
                     
-                    if odd < 1.8 or odd > 2.8:
+                    if odd < 1.4 or odd > 2.4:
                         continue
                     
                     key = None
