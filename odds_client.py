@@ -73,7 +73,7 @@ def odds_get(path, params=None, tracker=None):
                 _bump_usage(tracker, month, count)
             logger.info(f"🔑 Odds API clave #{i+1} OK (uso del mes: {count + 1})")
             return r
-        if r.status_code in (401, 403, 429) or 'OUT_OF_USAGE' in r.text[:200]:
+        if r.status_code in (401, 402, 403, 429) or 'OUT_OF_USAGE' in r.text[:200]:
             logger.warning(f"⚠️ Odds API clave #{i+1} agotada/no autorizada → rotando")
             continue
         logger.error(f"❌ Odds API HTTP {r.status_code}: {r.text[:200]}")
