@@ -53,6 +53,8 @@ def send(message):
 
 
 def decide(gap):
+    if gap > 25:
+        return {'ev_notify': 15.0, 'kelly': 8}, "sobreestimación muy fuerte"
     if gap > 10:
         return {'ev_notify': 12.0, 'kelly': 8}, "sobreestimación fuerte"
     if gap > 5:
