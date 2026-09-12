@@ -20,7 +20,7 @@ import sys
 import json
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from stats_tracker import StatsTracker
 from reports import compute_for
@@ -72,7 +72,25 @@ def main():
         logger.error("❌ Supabase no configurado")
         return 1
 
-    s = compute_for(tracker.get_all_picks())
+        all_picks = tracker.get_all_picks()
+    s = compute_for(all_picks)
+
+    # 🧪 Gap reciente: solo picks GENERADOS en los últimos 14 días
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    recent = []
+    for p in all_picks:
+        if p.get('status') not in ('won', 'lost'):
+            continue
+        try:
+            t = datetime.fromisoformat((p.get('timestamp') or '').replace('Z', '+00:00'))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            if t >= cutoff:
+                recent.append(p)
+        except Exception:
+            continue
+    sr = compute_for(recent) if recent else None
+
     if s['settled'] < MIN_SAMPLE or s['gap'] is None:
         if manual:
             send(f"🤖 <b>ESTADO DEL AUTO-AJUSTE</b>\n\n"
@@ -124,11 +142,18 @@ def main():
             cabecera = "🤖 <b>AUTO-AJUSTE DEL SISTEMA</b>"
             lectura = "🔄 Ajuste de Kelly según calibración detectada"
 
+                if sr and sr.get('gap') is not None and sr['settled'] >= 5:
+            linea_reciente = (f"🧪 Gap reciente (14 días, n={sr['settled']}): "
+                              f"<b>{sr['gap']:+.1f} pp</b>\n")
+        else:
+            linea_reciente = "🧪 Gap reciente: muestra aún insuficiente\n"
+
         msg = (f"{cabecera}\n\n"
                f"⚖️ Gap: <b>{gap:+.1f} pp</b> ({motivo})\n"
                f"🎯 EV mínimo: {prev.get('ev_notify', 10):.0f}% → <b>{new_cfg['ev_notify']:.0f}%</b>\n"
                f"💰 Kelly: 1/{prev.get('kelly', 4)} → <b>1/{new_cfg['kelly']}</b>\n"
-               f"📊 Muestra: {s['settled']} liquidados\n\n"
+               f"📊 Muestra: {s['settled']} liquidados\n"
+               f"{linea_reciente}\n"
                f"<i>{lectura}</i>\n\n"
                f"ℹ️ Más info: /glosario")
         send(msg)
