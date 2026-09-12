@@ -4,21 +4,23 @@ train_models.py · Re-entrenado de los 5 modelos XGBoost con fútbol actual.
 - Datos: football-data.co.uk (20 ligas, temporadas 23/24 → 26/27)
 - Features IDÉNTICAS a auto_scan.py (ventana 5 y fórmulas de build_team_db.py)
 - Split temporal: entrena con 23/24-25/26 y evalúa con 26/27 (escenario real)
-- --validate: compara el gap ANTIGUO (prob_ia guardada) vs el gap de los
-  modelos NUEVOS sobre tus picks reales liquidados (features en Supabase)
-
-Uso:
-  python train_models.py               # entrena + evalúa + guarda .pkl
-  python train_models.py --validate    # además valida contra picks reales
+- Gates de despliegue:
+    · Gate temporal: todos los gaps de la temporada 26/27 dentro de ±10 pp
+    · Gate real (con --validate): gap de los modelos nuevos sobre tus picks
+      liquidados (features guardadas en Supabase) ≤ ±10 pp y Brier menor
+- Si ambos pasan: escribe deploy_ok.txt y el marcador model_deployed_at
+  (el workflow hace commit de los .pkl solo si existe deploy_ok.txt)
 """
 import io
 import bisect
+import time
 import argparse
 import logging
 import requests
 import joblib
 import pandas as pd
 import numpy as np
+from datetime import datetime, timezone
 from xgboost import XGBClassifier
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,6 +29,7 @@ logger = logging.getLogger(__name__)
 WINDOW = 5
 SEASONS = ['2324', '2425', '2526', '2627']
 TEST_SEASON = '2627'
+GATE_PP = 10.0
 
 FEATURE_COLS = ['Home_Form_Pts', 'Away_Form_Pts', 'Form_Diff',
                 'Home_Goals_Scored', 'Away_Goals_Conceded',
@@ -62,10 +65,9 @@ def download_all():
                 if r.status_code != 200 or not r.text.strip():
                     continue
                 df = pd.read_csv(io.StringIO(r.text))
-                need = {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}
-                if not need.issubset(df.columns):
+                if not {"Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}.issubset(df.columns):
                     continue
-                df = df[list(need)].copy()
+                df = df[["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]].copy()
                 df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
                 df["FTHG"] = pd.to_numeric(df["FTHG"], errors="coerce")
                 df["FTAG"] = pd.to_numeric(df["FTAG"], errors="coerce")
@@ -75,13 +77,13 @@ def download_all():
                 logger.info(f"✅ {season}/{code} {name}: {len(df)} partidos")
             except Exception as e:
                 logger.warning(f"⚠️ {season}/{code}: {e}")
+            time.sleep(0.15)
     if not dfs:
         raise SystemExit("❌ Sin datos descargados")
     return pd.concat(dfs, ignore_index=True)
 
 
 def rolling_stats(dates, stats, d):
-    """Stats de los últimos ≤5 partidos ESTRICTAMENTE anteriores a d."""
     if not dates:
         return dict(DEFAULTS)
     idx = bisect.bisect_left(dates, d)
@@ -103,20 +105,20 @@ def build_dataset(results):
     hist = {}
     feats, labs, seasons = [], [], []
     for r in results.itertuples(index=False):
-        d, home, away, hg, ag = r.Date, r.HomeTeam, r.AwayTeam, int(r.FTHG), int(r.FTAG)
-        hd, hs = hist.get(home, ([], []))
-        ad, as_ = hist.get(away, ([], []))
-        h = rolling_stats(hd, hs, d)
-        a = rolling_stats(ad, as_, d)
+        d, home, away = r.Date, r.HomeTeam, r.AwayTeam
+        hg, ag = int(r.FTHG), int(r.FTAG)
+        h = rolling_stats(*hist.get(home, ([], [])), d)
+        a = rolling_stats(*hist.get(away, ([], [])), d)
         feats.append([h['pts'], a['pts'], h['pts'] - a['pts'],
                       h['gf'], a['ga'], h['gf'] - a['ga'],
                       (h['o25'] + a['o25']) / 2, (h['btts'] + a['btts']) / 2])
-        total, o25 = hg + ag, 1 if hg + ag >= 3 else 0
+        total = hg + ag
+        o25 = 1 if total >= 3 else 0
         btts = 1 if hg > 0 and ag > 0 else 0
         labs.append({
             'y1x2': 0 if hg > ag else (2 if hg < ag else 1),
             'o15': 1 if total >= 2 else 0,
-            'o25': 1 if total >= 3 else 0,
+            'o25': o25,
             'o35': 1 if total >= 4 else 0,
             'btts': btts,
         })
@@ -126,9 +128,7 @@ def build_dataset(results):
             td.append(d)
             ts.append((gf, ga, 3 if gf > ga else (1 if gf == ga else 0), o25, btts))
             hist[team] = (td, ts)
-    X = pd.DataFrame(feats, columns=FEATURE_COLS)
-    y = pd.DataFrame(labs)
-    return X, y, np.array(seasons)
+    return pd.DataFrame(feats, columns=FEATURE_COLS), pd.DataFrame(labs), np.array(seasons)
 
 
 def train_all(X, y):
@@ -147,18 +147,22 @@ def train_all(X, y):
 
 def evaluate(models, X, y):
     logger.info(f"🧪 EVALUACIÓN TEMPORAL (temporada {TEST_SEASON}, n={len(X)})")
+    gaps = {}
     p1 = models['1x2'].predict_proba(X)
-    acc = (p1.argmax(axis=1) == y['y1x2'].values).mean()
+    acc = float((p1.argmax(axis=1) == y['y1x2'].values).mean())
     p_true = p1[np.arange(len(X)), y['y1x2'].values]
-    logger.info(f"   1X2  · acc={acc*100:.1f}% · confianza media={p_true.mean()*100:.1f}% "
-                f"(calibrado si se parecen) · gap={(p_true.mean()-acc)*100:+.1f} pp")
+    gaps['1x2'] = (float(p_true.mean()) - acc) * 100
+    logger.info(f"   1X2  · acc={acc*100:.1f}% · confianza={p_true.mean()*100:.1f}% "
+                f"· gap={gaps['1x2']:+.1f} pp")
     for name, col in [('over15', 'o15'), ('over25', 'o25'),
                       ('over35', 'o35'), ('btts', 'btts')]:
         p = models[name].predict_proba(X)[:, 1]
         t = y[col].values
+        gaps[name] = float(p.mean() - t.mean()) * 100
         brier = float(((p - t) ** 2).mean())
         logger.info(f"   {name:6s} · pred={p.mean()*100:.1f}% real={t.mean()*100:.1f}% "
-                    f"· gap={(p.mean()-t.mean())*100:+.1f} pp · Brier={brier:.3f}")
+                    f"· gap={gaps[name]:+.1f} pp · Brier={brier:.3f}")
+    return gaps
 
 
 def save_models(models):
@@ -170,12 +174,12 @@ def save_models(models):
 
 
 def validate_against_picks(models):
-    """Compara gap ANTIGUO vs gap NUEVO sobre tus picks reales liquidados."""
+    """Gap ANTIGUO vs gap NUEVO sobre tus picks reales. Devuelve bool o None."""
     from stats_tracker import StatsTracker
     tr = StatsTracker()
     if not tr.enabled:
-        logger.warning("Supabase no configurado: sin validación contra picks")
-        return
+        logger.warning("Supabase no configurado: sin gate de picks reales")
+        return None
     old, new = [], []
     for p in tr.get_all_picks():
         if p.get('status') not in ('won', 'lost'):
@@ -212,22 +216,40 @@ def validate_against_picks(models):
         if pred is None:
             continue
         yv = 1.0 if p['status'] == 'won' else 0.0
-        new.append((pred, yv))
+        new.append((float(pred), yv))
         if p.get('prob_ia') is not None:
             old.append((float(p['prob_ia']), yv))
     if not new:
-        logger.warning("Sin picks con features guardadas")
-        return
-    g_old = (sum(x[0] for x in old)/len(old) - sum(x[1] for x in old)/len(old))*100 if old else None
-    g_new = (sum(x[0] for x in new)/len(new) - sum(x[1] for x in new)/len(new))*100
-    b_old = sum((x[0]-x[1])**2 for x in old)/len(old) if old else None
-    b_new = sum((x[0]-x[1])**2 for x in new)/len(new)
+        logger.warning("Sin picks con features guardadas: sin gate de picks reales")
+        return None
+    g_new = (sum(x[0] for x in new) / len(new) - sum(x[1] for x in new) / len(new)) * 100
+    b_new = sum((x[0] - x[1]) ** 2 for x in new) / len(new)
     logger.info(f"🎯 VALIDACIÓN SOBRE {len(new)} PICKS REALES")
-    if g_old is not None:
+    if old:
+        g_old = (sum(x[0] for x in old) / len(old) - sum(x[1] for x in old) / len(old)) * 100
+        b_old = sum((x[0] - x[1]) ** 2 for x in old) / len(old)
         logger.info(f"   Modelo ANTIGUO: gap {g_old:+.1f} pp · Brier {b_old:.3f}")
+        ok = abs(g_new) <= GATE_PP and b_new < b_old
+    else:
+        ok = abs(g_new) <= GATE_PP
     logger.info(f"   Modelo NUEVO:   gap {g_new:+.1f} pp · Brier {b_new:.3f}")
-    ok = abs(g_new) <= 10 and (b_old is None or b_new < b_old)
-    logger.info("   ✅ DESPLEGABLE" if ok else "   ❌ NO desplegar todavía")
+    logger.info("   ✅ Gate de picks: OK" if ok else "   ❌ Gate de picks: FALLA")
+    return ok
+
+
+def write_deploy_marker():
+    try:
+        from stats_tracker import StatsTracker
+        tr = StatsTracker()
+        if not tr.enabled:
+            return
+        tr.client.table('meta').upsert(
+            {'key': 'model_deployed_at',
+             'value': datetime.now(timezone.utc).isoformat()},
+            on_conflict='key').execute()
+        logger.info("🏷️ Marcador model_deployed_at escrito en meta")
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo escribir model_deployed_at: {e}")
 
 
 def main():
@@ -239,17 +261,29 @@ def main():
     results = download_all()
     logger.info(f"⚽ {len(results)} partidos descargados")
     X, y, seasons = build_dataset(results)
-    logger.info(f"🧮 Dataset: {len(X)} filas (train={sum(seasons != TEST_SEASON)}, "
-                f"test={sum(seasons == TEST_SEASON)})")
-
     tr_mask = seasons != TEST_SEASON
+    logger.info(f"🧮 Dataset: {len(X)} filas (train={int(tr_mask.sum())}, "
+                f"test={int((~tr_mask).sum())})")
+
     models = train_all(X[tr_mask], y[tr_mask])
-    evaluate(models, X[~tr_mask], y[~tr_mask])
+    gaps = evaluate(models, X[~tr_mask], y[~tr_mask])
+
+    ok_eval = all(abs(g) <= GATE_PP for g in gaps.values())
+    logger.info(f"🧪 Gate temporal: {'OK' if ok_eval else 'FALLA'} (todos |gap| ≤ {GATE_PP:.0f} pp)")
+
+    ok_pick = validate_against_picks(models) if args.validate else None
+    ok = ok_eval and (ok_pick if ok_pick is not None else True)
 
     if not args.no_save:
         save_models(models)
-    if args.validate:
-        validate_against_picks(models)
+
+    if ok:
+        with open('deploy_ok.txt', 'w') as f:
+            f.write('ok')
+        write_deploy_marker()
+        logger.info("✅ VALIDACIÓN SUPERADA → el workflow commiteará los modelos")
+    else:
+        logger.info("❌ VALIDACIÓN NO SUPERADA → los modelos NO se commitearán")
     return 0
 
 
