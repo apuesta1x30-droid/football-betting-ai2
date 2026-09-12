@@ -245,7 +245,7 @@ def get_team_stats(team_name, team_db):
 # ==========================================
 # ANÁLISIS MULTI-MERCADO
 # ==========================================
-def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.8, max_odd=2.8,
+def analyze_multi_market(models, fixtures_data, team_db, min_odd=1.4, max_odd=2.4,
                          only_today=True, recalib=None):
     value_bets = []
     now = datetime.now(timezone.utc)
@@ -456,8 +456,8 @@ ev_threshold = st.sidebar.slider("Umbral mínimo de EV (%)", min_value=2.0, max_
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 Filtro de Cuotas")
 col_odd1, col_odd2 = st.sidebar.columns(2)
-min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.8, step=0.1)
-max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=2.8, step=0.1)
+min_odd = col_odd1.number_input("Cuota mínima", min_value=1.01, max_value=10.0, value=1.4, step=0.1)
+max_odd = col_odd2.number_input("Cuota máxima", min_value=1.01, max_value=20.0, value=2.4, step=0.1)
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Filtro de Fecha")
 only_today = st.sidebar.checkbox("Solo partidos de HOY", value=True)
