@@ -81,6 +81,20 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
         return None
     
     cutoff_date = datetime.now(timezone.utc) - timedelta(weeks=weeks_back)
+    # Si hay modelos nuevos desplegados, usar solo picks posteriores a ellos
+    try:
+        resp = tracker.client.table('meta').select('value') \
+            .eq('key', 'model_deployed_at').execute()
+        if resp.data:
+            deploy = datetime.fromisoformat(resp.data[0]['value'])
+            if deploy.tzinfo is None:
+                deploy = deploy.replace(tzinfo=timezone.utc)
+            if deploy > cutoff_date:
+                cutoff_date = deploy
+                logger.info(f"🏷️ Capa B: usando solo picks posteriores al "
+                            f"despliegue de modelos ({deploy:%d/%m})")
+    except Exception:
+        pass
     xs, ys = [], []
     
     for p in tracker.get_all_picks():
