@@ -15,6 +15,7 @@ import logging
 import argparse
 import requests
 from stats_tracker import StatsTracker
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -71,7 +72,24 @@ def main():
         logger.error("❌ Supabase no configurado")
         return 1
 
-    m = calibration_metrics(tracker.get_all_picks())
+    picks = tracker.get_all_picks()
+    # Tras un despliegue de modelos, evaluar solo picks posteriores a él
+    try:
+        resp = tracker.client.table('meta').select('value') \
+            .eq('key', 'model_deployed_at').execute()
+        if resp.data:
+            deploy = datetime.fromisoformat(resp.data[0]['value'])
+            if deploy.tzinfo is None:
+                deploy = deploy.replace(tzinfo=timezone.utc)
+            post = [p for p in picks
+                    if (p.get('timestamp') or '')
+                    and datetime.fromisoformat(p['timestamp']) >= deploy]
+            if len([p for p in post if p['status'] in ('won', 'lost')]) >= MIN_SAMPLE:
+                picks = post
+                logger.info(f"🏷️ Alerta evaluando solo {len(picks)} picks post-despliegue")
+    except Exception as e:
+        logger.debug(f"Sin marcador de despliegue: {e}")
+    m = calibration_metrics(picks)
 
     # Modo test: siempre envía mensaje para verificar el circuito
     if args.test:
@@ -121,8 +139,8 @@ def main():
                 f"🤖 Prob. IA media: <b>{m['avg_pia']*100:.1f}%</b>\n"
                 f"⚖️ Gap: <b>{m['gap_pp']:+.1f} pp</b>\n🎲 Brier: {m['brier']:.3f}\n\n"
                 "📉 La IA está <b>SOBREESTIMANDO</b> probabilidades.\n"
-                "💡 Recomendación: sube el EV mínimo exigido (5–8%) o reduce "
-                "stakes hasta que el gap baje de 10 pp.")
+                "💡 El auto-ajuste (Capa A) ya gestiona EV mínimo y Kelly "
+                "automáticamente. No requiere acción manual.")
     else:
         body = (f"✅ <b>CALIBRACIÓN (modo conservador)</b>\n\n🔎 Muestra: <b>{m['n']}</b> liquidados\n"
                 f"🎯 Hit rate real: <b>{m['hit']*100:.1f}%</b>\n"
