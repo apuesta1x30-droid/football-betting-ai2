@@ -14,8 +14,8 @@ import sys
 import logging
 import argparse
 import requests
-from stats_tracker import StatsTracker
 from datetime import datetime, timezone
+from stats_tracker import StatsTracker
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
