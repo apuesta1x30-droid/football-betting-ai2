@@ -36,6 +36,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 EV_THRESHOLD_MIN = 2.0
 DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
+MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
 META_KEY_AUTO_TUNE = 'auto_tune'
 
 
@@ -170,7 +171,8 @@ def format_value_bet_alert(vb, kelly_fraction):
         f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
         f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
         f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
-        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction})\n\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction}"
+        f"{' · tope 3% aplicado' if stake >= MAX_STAKE - 1e-9 else ''})\n"
         f"🔖 Fuente: {vb['Fuente']}"
     )
 
@@ -192,11 +194,13 @@ def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
     )
 
 
+MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
+
 def calculate_kelly_stake(prob, odd, fraction=4):
     if prob <= 0 or odd <= 1:
         return 0.0
     kelly = (prob * odd - 1) / (odd - 1)
-    return max(0.0, kelly / fraction)
+    return min(max(0.0, kelly / fraction), MAX_STAKE)
 
 
 def load_models():
