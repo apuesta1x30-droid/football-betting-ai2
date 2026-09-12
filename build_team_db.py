@@ -104,10 +104,9 @@ def norm_team(name):
 
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
 
-    stop = {
+        stop = {
         "fc", "cf", "afc", "sc", "cd", "sd", "ud", "ac", "as",
         "calcio", "club", "football", "futbol", "de", "the",
-        "atletico", "atletico", "deportivo", "real", "santos"
     }
     parts = [p for p in s.split() if p not in stop]
     return " ".join(parts).strip()
