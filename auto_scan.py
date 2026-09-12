@@ -428,12 +428,17 @@ def scan_value_bets():
             if prob is None:
                 continue
             
-            # Capa B: corregir la probabilidad antes de calcular el EV
-            if recalib:
-                prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
-            
-            ev = (prob * odd) - 1
-            ev_percentage = ev * 100
+        # Capa B: corregir la probabilidad antes de calcular el EV
+        if recalib:
+            prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
+        
+        ev = (prob * odd) - 1
+        ev_percentage = ev * 100
+        
+        # Verificación de seguridad: si p_corr * odd < 1.0, el pick no tiene edge real
+        if prob * odd < 1.0:
+            logger.debug(f"⚠️ {home_team} vs {away_team} | {mercado_name}: sin edge real (p_corr={prob:.3f}, odd={odd:.2f})")
+            continue
             
             if ev_percentage > EV_THRESHOLD_MIN:
                 value_bets.append({
