@@ -133,10 +133,9 @@ def main():
         # Detectar transición específica: sale del modo seguridad (gap >+10 → ≤+10)
         saliendo_de_seguridad = (
             changed
-            and prev.get('ev_notify', 10) == 12.0
+            and prev.get('ev_notify', 10) >= 12.0
             and new_cfg['ev_notify'] < 12.0
         )
-
         if not changed:
             cabecera = "🤖 <b>ESTADO DEL AUTO-AJUSTE</b> (sin cambios)"
             lectura = "✅ Sin cambios: se mantiene la configuración actual"
