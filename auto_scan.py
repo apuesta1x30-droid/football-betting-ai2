@@ -305,7 +305,7 @@ def scan_value_bets():
     if recalib:
         logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + {recalib['beta']:.2f}·p (n={recalib['n']})")
     else:
-        logger.info("🧮 Capa B inactiva (n<50 liquidados)")
+        logger.info("🧮 Capa B inactiva (n<30 liquidados de la época actual)")
     
     response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
