@@ -6,6 +6,7 @@ SUPABASE_KEY) para poder convivir con otras variables de otros proyectos.
 Si no hay credenciales, queda desactivado sin romper la aplicación.
 """
 import os
+import time
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -130,12 +131,16 @@ class StatsTracker:
     def get_all_picks(self) -> List[Dict]:
         if not self.client:
             return []
-        try:
-            resp = self.client.table(self.table).select("*").order("timestamp", desc=True).execute()
-            return resp.data or []
-        except Exception as e:
-            logger.error(f"Error leyendo picks: {e}")
-            return []
+        for attempt in (1, 2, 3):
+            try:
+                resp = self.client.table(self.table).select("*").order("timestamp", desc=True).execute()
+                return resp.data or []
+            except Exception as e:
+                logger.warning(f"⚠️ Error leyendo picks (intento {attempt}/3): {e}")
+                if attempt < 3:
+                    time.sleep(1.5 * attempt)
+        logger.error("❌ get_all_picks: 3 intentos fallidos; devuelvo lista vacía")
+        return []
 
     # ==========================================
     # MÉTRICAS
