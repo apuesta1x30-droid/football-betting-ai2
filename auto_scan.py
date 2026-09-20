@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-EV_THRESHOLD_MIN = 5.0
+EV_THRESHOLD_MIN = 0.5
 DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
 MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
