@@ -510,8 +510,8 @@ def scan_value_bets():
                 time.sleep(0.5)
         else:
             send_telegram_message(
-                f"⚠️ <b>Sin apuestas de valor alto</b>\n\n"
-                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV 2-{ev_notify:.0f}%), "
+                f"⚠️ <b>Sin apuestas de valor alto</b>\n"
+                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV {EV_THRESHOLD_MIN:.1f}-{ev_notify:.0f}%), "
                 f"pero ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n\n"
                 f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
                 f"💡 Mercado eficiente en las próximas horas."
