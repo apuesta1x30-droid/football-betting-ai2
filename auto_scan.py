@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-EV_THRESHOLD_MIN = 2.0
+EV_THRESHOLD_MIN = 5.0
 DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
 MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
@@ -452,6 +452,7 @@ def scan_value_bets():
         
         ev = (prob * odd) - 1
         ev_percentage = ev * 100
+        stats['max_ev'] = max(stats.get('max_ev', -99.0), ev_percentage)
         
         # Verificación de seguridad: si p_corr * odd < 1.0, el pick no tiene edge real
         if prob * odd < 1.0:
@@ -522,8 +523,9 @@ def scan_value_bets():
                 registered_count += 1
         logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
-        send_telegram_message("💤 <b>Escaneo completado</b>\n\nSin Value Bets detectadas en las próximas horas.")
-    
+        logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', 0.0):+.1f}% "
+                    f"(umbral de registro: {EV_THRESHOLD_MIN}%)")
+        send_telegram_message("💤 <b>Escaneo completado</b>\nSin Value Bets detectadas en las próximas horas.")
     return 0
 
 
