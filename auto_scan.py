@@ -38,6 +38,17 @@ DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
 MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
 META_KEY_AUTO_TUNE = 'auto_tune'
+# Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
+# (temporada 26/27, n=738) del 12/09. Solo actúa mientras la Capa B viva
+# está inactiva; al arrancar ella (30 liquidados), la semilla se apaga sola.
+# 1X2 y DC/HT se dejan sin semilla: su sesgo no es aditivo uniforme.
+SEED_CALIB_PP = {
+    'Over 1.5 Goles': +1.2,
+    'Over 2.5 Goles': +3.6,
+    'Over 3.5 Goles': +5.0,
+    'BTTS - Sí (Ambos marcan)': +1.5,
+    'BTTS - No': -1.5,
+}
 
 
 def load_auto_tune_config(tracker):
@@ -449,10 +460,15 @@ def scan_value_bets():
         # Capa B: corregir la probabilidad antes de calcular el EV
         if recalib:
             prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
-        
+        else:
+            # Capa B semilla: corrige el conservadurismo medido en validación
+            prob = max(0.03, min(0.97,
+                    prob + SEED_CALIB_PP.get(mercado_name, 0.0) / 100))
         ev = (prob * odd) - 1
         ev_percentage = ev * 100
-        stats['max_ev'] = max(stats.get('max_ev', -99.0), ev_percentage)
+        if ev_percentage > stats.get('max_ev', -99.0):
+            stats['max_ev'] = ev_percentage
+            stats['max_ev_detail'] = f"{mercado_name} · {home_team} vs {away_team}"
         
         # Verificación de seguridad: si p_corr * odd < 1.0, el pick no tiene edge real
         if prob * odd < 1.0:
@@ -524,7 +540,8 @@ def scan_value_bets():
         logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
         logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', 0.0):+.1f}% "
-                    f"(umbral de registro: {EV_THRESHOLD_MIN}%)")
+                f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
+                f"mejor candidato: {stats.get('max_ev_detail', 'n/a')}")
         send_telegram_message("💤 <b>Escaneo completado</b>\nSin Value Bets detectadas en las próximas horas.")
     return 0
 
