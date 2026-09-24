@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-v0.6 · Escaneo automático de value bets con auto-ajuste dinámico.
+v0.7 · Escaneo automático de value bets con auto-ajuste dinámico.
 - Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
 - Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
 - Modo seguridad (gap > +10): envía banner de aviso PERO notifica los picks
   en formato normal para poder liquidarlos manualmente con 👌/👎
 - Registra picks en Supabase con features del modelo y message_id de Telegram
 - Filtra por hora actual (solo partidos futuros)
+- OMITE partidos con algún equipo fuera de team_stats_db (sin stats reales
+  no hay predicción válida: evita picks artefacto con features por defecto)
 - Deduplica picks ya alertados (no re-alerta en scans posteriores)
 - Lista negra empírica de ligas (n≥8 y PnL≤-5)
 - The Odds API con rotación de claves (odds_client)
@@ -38,9 +40,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-# TEMPORAL (hasta ~05/10 o hasta ver "🧮 Capa B activa"): umbral bajo para
-# romper el círculo vicioso post-reset (sin registros no hay liquidados,
-# sin liquidados no arranca la Capa B). Luego volver a 2.0.
+# TEMPORAL (hasta ver "🧮 Capa B activa" o ~05/10): umbral bajo para romper
+# el círculo vicioso post-reset (sin registros no hay liquidados, sin
+# liquidados no arranca la Capa B). Luego volver a 2.0.
 EV_THRESHOLD_MIN = 0.5
 
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
@@ -304,6 +306,8 @@ def scan_value_bets():
     if not models:
         return 1
     team_db = load_team_database()
+    team_db_lower = {str(t).lower() for t in team_db}
+    skipped_nodb = 0
 
     # Capa B: recalibración empírica de probabilidades
     recalib = compute_recalib(tracker)
@@ -342,6 +346,10 @@ def scan_value_bets():
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
         now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
         if match_time_es <= now_es:
+            continue
+        # Sin stats reales no hay predicción válida: se omite el partido
+        if home_team.lower() not in team_db_lower or away_team.lower() not in team_db_lower:
+            skipped_nodb += 1
             continue
         stats['total'] += 1
 
@@ -479,6 +487,8 @@ def scan_value_bets():
                     "Features": features.iloc[0].to_dict()
                 })
 
+    if skipped_nodb:
+        logger.info(f"⏭️ {skipped_nodb} partidos omitidos: algún equipo fuera de team_stats_db")
     logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', -99.0):+.1f}% "
                 f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
                 f"mejor candidato: {stats.get('max_ev_detail', 'n/a')}")
