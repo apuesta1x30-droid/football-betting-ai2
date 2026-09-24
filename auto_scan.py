@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-v0.5-B · Escaneo automático de value bets con auto-ajuste dinámico.
+v0.6 · Escaneo automático de value bets con auto-ajuste dinámico.
 - Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
 - Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
 - Modo seguridad (gap > +10): envía banner de aviso PERO notifica los picks
@@ -10,6 +10,12 @@ v0.5-B · Escaneo automático de value bets con auto-ajuste dinámico.
 - Deduplica picks ya alertados (no re-alerta en scans posteriores)
 - Lista negra empírica de ligas (n≥8 y PnL≤-5)
 - The Odds API con rotación de claves (odds_client)
+- Capa B viva (recalibración con picks liquidados post-despliegue) y,
+  mientras está inactiva, Capa B SEMILLA (sesgo medido fuera de muestra
+  en la validación temporal del 12/09, n=738)
+- Techo duro de stake MAX_STAKE = 3% de banca por pick
+- Ventana de cuotas 1.4-2.4 (decisión del usuario)
+- EV_THRESHOLD_MIN = 0.5 TEMPORAL para romper el círculo post-reset
 """
 import os
 import sys
@@ -23,7 +29,6 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
-
 from stats_tracker import StatsTracker
 from odds_client import odds_get, get_keys
 
@@ -33,14 +38,15 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
+# TEMPORAL (hasta ~05/10 o hasta ver "🧮 Capa B activa"): umbral bajo para
+# romper el círculo vicioso post-reset (sin registros no hay liquidados,
+# sin liquidados no arranca la Capa B). Luego volver a 2.0.
 EV_THRESHOLD_MIN = 0.5
-DEFAULT_EV_NOTIFY = 10.0
-DEFAULT_KELLY = 4
-MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
-META_KEY_AUTO_TUNE = 'auto_tune'
+
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
-# (temporada 26/27, n=738) del 12/09. Solo actúa mientras la Capa B viva
-# está inactiva; al arrancar ella (30 liquidados), la semilla se apaga sola.
+# (temporada 26/27, n=738) del 12/09, en puntos porcentuales de probabilidad.
+# Solo actúa mientras la Capa B viva está inactiva; al arrancar ella
+# (30 liquidados post-despliegue), la semilla se apaga sola.
 # 1X2 y DC/HT se dejan sin semilla: su sesgo no es aditivo uniforme.
 SEED_CALIB_PP = {
     'Over 1.5 Goles': +1.2,
@@ -49,6 +55,11 @@ SEED_CALIB_PP = {
     'BTTS - Sí (Ambos marcan)': +1.5,
     'BTTS - No': -1.5,
 }
+
+DEFAULT_EV_NOTIFY = 10.0
+DEFAULT_KELLY = 4
+MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
+META_KEY_AUTO_TUNE = 'auto_tune'
 
 
 def load_auto_tune_config(tracker):
@@ -85,13 +96,13 @@ def league_blacklist(tracker, min_n=8, min_pnl=-5.0):
             a['pnl'] -= 1.0
     return {lg for lg, a in agg.items() if a['n'] >= min_n and a['pnl'] <= min_pnl}
 
+
 def compute_recalib(tracker, min_n=30, weeks_back=4):
     """Capa B: recalibración empírica usando solo picks recientes.
     Evita contaminación por picks antiguos inflados.
     Devuelve {'alpha', 'beta', 'n'} o None si hay pocos liquidados."""
     if not tracker or not tracker.enabled:
         return None
-    
     cutoff_date = datetime.now(timezone.utc) - timedelta(weeks=weeks_back)
     # Si hay modelos nuevos desplegados, usar solo picks posteriores a ellos
     try:
@@ -108,47 +119,39 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
     except Exception:
         pass
     xs, ys = [], []
-    
     for p in tracker.get_all_picks():
         if p.get('status') not in ('won', 'lost') or p.get('prob_ia') is None:
             continue
-        
-        # Filtrar por fecha (timestamp del pick)
         try:
             pick_time = datetime.fromisoformat(p.get('timestamp', '').replace('Z', '+00:00'))
             if pick_time < cutoff_date:
                 continue
         except Exception:
             continue
-        
         try:
             xs.append(float(p['prob_ia']))
             ys.append(1.0 if p['status'] == 'won' else 0.0)
         except Exception:
             continue
-    
     n = len(xs)
     if n < min_n:
         logger.info(f"🧮 Capa B: insuficientes picks recientes ({n}/{min_n} en últimas {weeks_back} semanas)")
         return None
-    
     mx = sum(xs) / n
     my = sum(ys) / n
     sxx = sum((x - mx) ** 2 for x in xs)
     if sxx <= 1e-9:
         return None
-    
     beta = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
     alpha = my - beta * mx
-    
     logger.info(f"🧮 Capa B (últimas {weeks_back} semanas): p_corr = {alpha:.3f} + {beta:.3f}·p (n={n})")
     return {'alpha': alpha, 'beta': beta, 'n': n}
+
 
 def send_telegram_message(message, parse_mode="HTML"):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning("Telegram no configurado")
         return None
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -156,7 +159,6 @@ def send_telegram_message(message, parse_mode="HTML"):
         "parse_mode": parse_mode,
         "disable_web_page_preview": True
     }
-    
     try:
         response = requests.post(url, json=data, timeout=10)
         if response.status_code == 200:
@@ -170,20 +172,27 @@ def send_telegram_message(message, parse_mode="HTML"):
         return None
 
 
+def calculate_kelly_stake(prob, odd, fraction=4):
+    if prob <= 0 or odd <= 1:
+        return 0.0
+    kelly = (prob * odd - 1) / (odd - 1)
+    return min(max(0.0, kelly / fraction), MAX_STAKE)
+
+
 def format_value_bet_alert(vb, kelly_fraction):
     stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'], fraction=kelly_fraction)
+    tope = ' · tope 3% aplicado' if stake >= MAX_STAKE - 1e-9 else ''
     return (
-        f"🎯 <b>VALUE BET DETECTADA</b>\n\n"
+        f"🎯 <b>VALUE BET DETECTADA</b>\n"
         f"🏆 <b>{vb['Liga']}</b>\n"
         f"⚽ {vb['Partido']}\n"
-        f"🕐 {vb['Hora']}\n\n"
+        f"🕐 {vb['Hora']}\n"
         f"📊 <b>{vb['Mercado']}</b>\n"
         f"💰 Cuota: <b>{vb['Cuota']:.2f}</b>\n"
         f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
-        f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n\n"
+        f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n"
         f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
-        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction}"
-        f"{' · tope 3% aplicado' if stake >= MAX_STAKE - 1e-9 else ''})\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction}{tope})\n"
         f"🔖 Fuente: {vb['Fuente']}"
     )
 
@@ -194,24 +203,14 @@ def format_summary_message(stats, value_bets, cfg, n_blacklist=0):
         config_line += f" (gap {cfg['gap']:+.1f} pp)"
     if n_blacklist:
         config_line += f" · 🚫 {n_blacklist} ligas excluidas"
-    
     return (
-        f"📊 <b>RESUMEN DEL ESCANEO</b>\n\n"
+        f"📊 <b>RESUMEN DEL ESCANEO</b>\n"
         f"🔎 Partidos analizados: <b>{stats['total']}</b>\n"
-        f"✅ Value Bets detectadas: <b>{len(value_bets)}</b>\n\n"
-        f"{config_line}\n\n"
+        f"✅ Value Bets detectadas: <b>{len(value_bets)}</b>\n"
+        f"{config_line}\n"
         f"📡 Datos de The Odds API\n"
         f"🤖 Probabilidades: Modelo XGBoost"
     )
-
-
-MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
-
-def calculate_kelly_stake(prob, odd, fraction=4):
-    if prob <= 0 or odd <= 1:
-        return 0.0
-    kelly = (prob * odd - 1) / (odd - 1)
-    return min(max(0.0, kelly / fraction), MAX_STAKE)
 
 
 def load_models():
@@ -248,14 +247,12 @@ def get_team_stats(team_name, team_db):
         'Last_Over25_Rate': 0.50,
         'Last_BTTS_Rate': 0.50
     }
-    
     if team_name in team_db:
         stats = team_db[team_name]
         for key, value in default_stats.items():
             if key not in stats:
                 stats[key] = value
         return stats
-    
     team_lower = team_name.lower()
     for db_team, stats in team_db.items():
         if db_team.lower() == team_lower:
@@ -263,7 +260,6 @@ def get_team_stats(team_name, team_db):
                 if key not in stats:
                     stats[key] = value
             return stats
-    
     return default_stats.copy()
 
 
@@ -287,11 +283,10 @@ def calculate_over05_ht_prob(prob_over25):
 
 def scan_value_bets():
     logger.info("🚀 Iniciando escaneo automático...")
-    
     if not get_keys():
         logger.error("❌ No hay claves de The Odds API configuradas")
         return 1
-    
+
     tracker = StatsTracker()
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
@@ -304,20 +299,19 @@ def scan_value_bets():
     if safety_mode:
         logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → "
                     f"aviso enviado, picks notificados para liquidación manual")
-    
+
     models = load_models()
     if not models:
         return 1
-    
     team_db = load_team_database()
-    
+
     # Capa B: recalibración empírica de probabilidades
     recalib = compute_recalib(tracker)
     if recalib:
         logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + {recalib['beta']:.2f}·p (n={recalib['n']})")
     else:
-        logger.info("🧮 Capa B inactiva (n<30 liquidados de la época actual)")
-    
+        logger.info("🧮 Capa B inactiva (n<30 liquidados de la época actual); usará semilla")
+
     response = odds_get("sports/soccer/odds", {
         "regions": "eu,us",
         "markets": "h2h,totals",
@@ -326,14 +320,14 @@ def scan_value_bets():
     if response is None or response.status_code != 200:
         logger.error("❌ Error The Odds API (claves agotadas o tope mensual)")
         return 1
+
     fixtures_data = response.json()
-    
     logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
-    
+
     value_bets = []
     now = datetime.now(timezone.utc)
-    stats = {'total': 0, 'api_football': 0, 'calculated': 0, 'today': 0}
-    
+    stats = {'total': 0, 'today': 0}
+
     for event in fixtures_data:
         league = event.get("sport_title", "Unknown")
         if league in blacklist:
@@ -341,28 +335,23 @@ def scan_value_bets():
         home_team = event["home_team"]
         away_team = event["away_team"]
         commence_time = event["commence_time"]
-        
         if commence_time.endswith('Z'):
             match_time = datetime.fromisoformat(commence_time.replace('Z', '+00:00'))
         else:
             match_time = datetime.fromisoformat(commence_time)
-        
         match_time_es = match_time.astimezone(ZoneInfo("Europe/Madrid"))
         now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
-        
         if match_time_es <= now_es:
             continue
-        
         stats['total'] += 1
-        
+
         home_stats = get_team_stats(home_team, team_db)
         away_stats = get_team_stats(away_team, team_db)
-        
         form_diff = home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7)
         goal_threat_diff = home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4)
         combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2
         combined_btts = (home_stats.get('Last_BTTS_Rate', 0.50) + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
-        
+
         features = pd.DataFrame([{
             'Home_Form_Pts': home_stats.get('Last_Form_Pts', 7),
             'Away_Form_Pts': away_stats.get('Last_Form_Pts', 7),
@@ -373,15 +362,15 @@ def scan_value_bets():
             'Combined_Over25_Rate': combined_o25,
             'Combined_BTTS_Rate': combined_btts
         }])
-        
+
         probs_1x2 = models['1x2'].predict_proba(features)[0]
         prob_over25 = models['over25'].predict_proba(features)[0][1]
         prob_btts = models['btts'].predict_proba(features)[0][1]
         dc_probs = calculate_double_chance_probs(models, features)
         prob_over05_ht = calculate_over05_ht_prob(prob_over25)
-        
+
+        # Cuotas reales de The Odds API (mejor precio por mercado)
         best_odds = {}
-        
         for bookmaker in event.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
                 market_key = market["key"]
@@ -389,10 +378,8 @@ def scan_value_bets():
                     odd = outcome["price"]
                     name = outcome["name"]
                     point = outcome.get("point", 2.5)
-                    
                     if odd < 1.4 or odd > 2.4:
                         continue
-                    
                     key = None
                     if market_key == "h2h":
                         if name == home_team:
@@ -404,18 +391,17 @@ def scan_value_bets():
                     elif market_key == "totals" and name == "Over":
                         if point in [1.5, 2.5, 3.5]:
                             key = f"Over_{point}"
-                    
                     if key is not None:
                         if key not in best_odds or odd > best_odds[key]:
                             best_odds[key] = odd
-        
+
         for market_key, odd in best_odds.items():
             prob = None
             mercado_name = None
             is_calculated = '_CALC' in market_key
-            
+
             if market_key.startswith("1X2_"):
-                team_part = market_key.split("_")[1]
+                team_part = market_key.split("_", 1)[1]
                 if team_part == home_team:
                     prob, mercado_name = probs_1x2[0], f"1X2 - {home_team}"
                 elif team_part == "Draw":
@@ -453,28 +439,32 @@ def scan_value_bets():
                     prob, mercado_name = prob_btts, "BTTS - Sí (Ambos marcan)"
                 elif btts_type == "No":
                     prob, mercado_name = 1 - prob_btts, "BTTS - No"
-            
+
             if prob is None:
                 continue
-            
-        # Capa B: corregir la probabilidad antes de calcular el EV
-        if recalib:
-            prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
-        else:
-            # Capa B semilla: corrige el conservadurismo medido en validación
-            prob = max(0.03, min(0.97,
-                    prob + SEED_CALIB_PP.get(mercado_name, 0.0) / 100))
-        ev = (prob * odd) - 1
-        ev_percentage = ev * 100
-        if ev_percentage > stats.get('max_ev', -99.0):
-            stats['max_ev'] = ev_percentage
-            stats['max_ev_detail'] = f"{mercado_name} · {home_team} vs {away_team}"
-        
-        # Verificación de seguridad: si p_corr * odd < 1.0, el pick no tiene edge real
-        if prob * odd < 1.0:
-            logger.debug(f"⚠️ {home_team} vs {away_team} | {mercado_name}: sin edge real (p_corr={prob:.3f}, odd={odd:.2f})")
-            continue
-            
+
+            # Capa B: corregir la probabilidad antes de calcular el EV.
+            # Si la Capa B viva está activa, manda ella; si no, semilla.
+            if recalib:
+                prob = max(0.03, min(0.97, recalib['alpha'] + recalib['beta'] * prob))
+            else:
+                prob = max(0.03, min(0.97,
+                                     prob + SEED_CALIB_PP.get(mercado_name, 0.0) / 100))
+
+            ev = (prob * odd) - 1
+            ev_percentage = ev * 100
+
+            # Diagnóstico: mejor candidato del escaneo (aunque no se registre)
+            if ev_percentage > stats.get('max_ev', -99.0):
+                stats['max_ev'] = ev_percentage
+                stats['max_ev_detail'] = f"{mercado_name} · {home_team} vs {away_team}"
+
+            # Verificación de seguridad: si p_corr * odd < 1.0, no hay edge real
+            if prob * odd < 1.0:
+                logger.debug(f"⚠️ {home_team} vs {away_team} | {mercado_name}: "
+                             f"sin edge real (p_corr={prob:.3f}, odd={odd:.2f})")
+                continue
+
             if ev_percentage > EV_THRESHOLD_MIN:
                 value_bets.append({
                     "Liga": league,
@@ -483,31 +473,32 @@ def scan_value_bets():
                     "Mercado": mercado_name,
                     "Cuota": odd,
                     "Prob. IA": prob,
-                    "Prob. Casa": 1/odd,
+                    "Prob. Casa": 1 / odd,
                     "EV (%)": ev_percentage,
-                    "Fuente": "Cálculo" if is_calculated else "API-Football",
+                    "Fuente": "Cálculo (modelo)" if is_calculated else "The Odds API",
                     "Features": features.iloc[0].to_dict()
                 })
-    
+
+    logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', -99.0):+.1f}% "
+                f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
+                f"mejor candidato: {stats.get('max_ev_detail', 'n/a')}")
+
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
-        
         top10 = sorted(
             [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
             key=lambda x: -x['EV (%)']
         )[:10]
-        
         if safety_mode:
             send_telegram_message(
-                f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n\n"
+                f"🚫 <b>MODO SEGURIDAD ACTIVO</b>\n"
                 f"⚖️ Gap {cfg['gap']:+.1f} pp: el modelo está sobreestimando.\n"
                 f"NO apuestes dinero real: picks enviados solo para registro.\n"
                 f"Puedes liquidarlos manualmente con 👌/👎.\n"
-                f"🚫 Ligas excluidas por historial: {len(blacklist)}\n\n"
+                f"🚫 Ligas excluidas por historial: {len(blacklist)}\n"
                 f"ℹ️ Más info: /glosario")
-        
         if top10:
-            # Deduplicación por telegram_message_id (no por registro en BD)
+            # Deduplicación: no re-alertar picks ya alertados en scans previos
             todos = tracker.get_all_picks()
             con_msg = {p.get('raw_hash') for p in todos if p.get('telegram_message_id')}
             sin_msg = {p.get('raw_hash'): p['id'] for p in todos
@@ -527,22 +518,20 @@ def scan_value_bets():
         else:
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n"
-                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas (EV {EV_THRESHOLD_MIN:.1f}-{ev_notify:.0f}%), "
-                f"pero ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n\n"
+                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas "
+                f"(EV {EV_THRESHOLD_MIN:.1f}-{ev_notify:.0f}%), "
+                f"pero ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n"
                 f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
                 f"💡 Mercado eficiente en las próximas horas."
             )
-        
         registered_count = 0
         for vb in value_bets:
             if tracker.register_pick(vb):
                 registered_count += 1
         logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
-        logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', 0.0):+.1f}% "
-                f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
-                f"mejor candidato: {stats.get('max_ev_detail', 'n/a')}")
         send_telegram_message("💤 <b>Escaneo completado</b>\nSin Value Bets detectadas en las próximas horas.")
+
     return 0
 
 
