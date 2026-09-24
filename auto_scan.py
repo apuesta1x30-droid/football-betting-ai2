@@ -489,9 +489,13 @@ def scan_value_bets():
 
     if skipped_nodb:
         logger.info(f"⏭️ {skipped_nodb} partidos omitidos: algún equipo fuera de team_stats_db")
-    logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats.get('max_ev', -99.0):+.1f}% "
-                f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
-                f"mejor candidato: {stats.get('max_ev_detail', 'n/a')}")
+    if stats.get('max_ev_detail'):
+        logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats['max_ev']:+.1f}% "
+                    f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
+                    f"mejor candidato: {stats['max_ev_detail']}")
+    else:
+        logger.info("🔍 Diagnóstico: sin candidatos evaluables (cuotas fuera de "
+                    "la ventana 1.4-2.4 o partidos omitidos)")
 
     if value_bets:
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
