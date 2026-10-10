@@ -40,10 +40,11 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-# TEMPORAL (hasta ver "🧮 Capa B activa" o ~05/10): umbral bajo para romper
-# el círculo vicioso post-reset (sin registros no hay liquidados, sin
-# liquidados no arranca la Capa B). Luego volver a 2.0.
-EV_THRESHOLD_MIN = 0.5
+# MODO CENSO (hasta ver "🧮 Capa B activa"): registramos también opiniones
+# ligeramente negativas para alimentar la Capa B con muestra amplia y poco
+# sesgada, y acumular CLV. El PnL de esta ventana será ~-1..-3% por
+# construcción: SE IGNORA. Al arrancar la Capa B → volver a 2.0.
+EV_THRESHOLD_MIN = -2.0
 
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
 # (temporada 26/27, n=738) del 12/09, en puntos porcentuales de probabilidad.
@@ -467,10 +468,10 @@ def scan_value_bets():
                 stats['max_ev'] = ev_percentage
                 stats['max_ev_detail'] = f"{mercado_name} · {home_team} vs {away_team}"
 
-            # Verificación de seguridad: si p_corr * odd < 1.0, no hay edge real
-            if prob * odd < 1.0:
+            # Filtro único de registro (en censo admite EV ligeramente negativo)
+            if ev_percentage < EV_THRESHOLD_MIN:
                 logger.debug(f"⚠️ {home_team} vs {away_team} | {mercado_name}: "
-                             f"sin edge real (p_corr={prob:.3f}, odd={odd:.2f})")
+                             f"EV {ev_percentage:+.1f}% bajo umbral {EV_THRESHOLD_MIN}%")
                 continue
 
             if ev_percentage > EV_THRESHOLD_MIN:
