@@ -180,7 +180,7 @@ def send_telegram_message(message, parse_mode="HTML"):
 def calculate_kelly_stake(prob, odd, fraction=4):
     if prob <= 0 or odd <= 1:
         return 0.0
-    kelly = (prob * odd) - 1) / (odd - 1)
+    kelly = (prob * odd - 1) / (odd - 1)
     return min(max(0.0, kelly / fraction), MAX_STAKE)
 
 
