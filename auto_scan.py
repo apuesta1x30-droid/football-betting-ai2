@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-v0.7 · Escaneo automático de value bets con auto-ajuste dinámico.
+v0.8 · Escaneo automático de value bets con auto-ajuste dinámico.
+- MODO CENSO ACTIVO (EV_THRESHOLD_MIN = -2.0): registra también opiniones
+  ligeramente negativas para alimentar la Capa B con muestra amplia y poco
+  sesgada, y acumular CLV. Al ver "🧮 Capa B activa" → volver a 2.0.
 - Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
 - Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
 - Modo seguridad (gap > +10): envía banner de aviso PERO notifica los picks
@@ -17,7 +20,6 @@ v0.7 · Escaneo automático de value bets con auto-ajuste dinámico.
   en la validación temporal del 12/09, n=738)
 - Techo duro de stake MAX_STAKE = 3% de banca por pick
 - Ventana de cuotas 1.4-2.4 (decisión del usuario)
-- EV_THRESHOLD_MIN = 0.5 TEMPORAL para romper el círculo post-reset
 """
 import os
 import sys
@@ -178,7 +180,7 @@ def send_telegram_message(message, parse_mode="HTML"):
 def calculate_kelly_stake(prob, odd, fraction=4):
     if prob <= 0 or odd <= 1:
         return 0.0
-    kelly = (prob * odd - 1) / (odd - 1)
+    kelly = (prob * odd) - 1) / (odd - 1)
     return min(max(0.0, kelly / fraction), MAX_STAKE)
 
 
@@ -474,19 +476,18 @@ def scan_value_bets():
                              f"EV {ev_percentage:+.1f}% bajo umbral {EV_THRESHOLD_MIN}%")
                 continue
 
-            if ev_percentage > EV_THRESHOLD_MIN:
-                value_bets.append({
-                    "Liga": league,
-                    "Partido": f"{home_team} vs {away_team}",
-                    "Hora": match_time_es.strftime('%d/%m %H:%M'),
-                    "Mercado": mercado_name,
-                    "Cuota": odd,
-                    "Prob. IA": prob,
-                    "Prob. Casa": 1 / odd,
-                    "EV (%)": ev_percentage,
-                    "Fuente": "Cálculo (modelo)" if is_calculated else "The Odds API",
-                    "Features": features.iloc[0].to_dict()
-                })
+            value_bets.append({
+                "Liga": league,
+                "Partido": f"{home_team} vs {away_team}",
+                "Hora": match_time_es.strftime('%d/%m %H:%M'),
+                "Mercado": mercado_name,
+                "Cuota": odd,
+                "Prob. IA": prob,
+                "Prob. Casa": 1 / odd,
+                "EV (%)": ev_percentage,
+                "Fuente": "Cálculo (modelo)" if is_calculated else "The Odds API",
+                "Features": features.iloc[0].to_dict()
+            })
 
     if skipped_nodb:
         logger.info(f"⏭️ {skipped_nodb} partidos omitidos: algún equipo fuera de team_stats_db")
@@ -533,11 +534,11 @@ def scan_value_bets():
         else:
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n"
-                f"📊 Hay <b>{len(value_bets)}</b> value bets registradas "
-                f"(EV {EV_THRESHOLD_MIN:.1f}-{ev_notify:.0f}%), "
-                f"pero ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n"
+                f"📊 Hay <b>{len(value_bets)}</b> picks registrados en modo censo "
+                f"(EV {EV_THRESHOLD_MIN:.1f} a {ev_notify:.0f}%), "
+                f"ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n"
                 f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
-                f"💡 Mercado eficiente en las próximas horas."
+                f"💡 Alimentando la Capa B con muestra amplia."
             )
         registered_count = 0
         for vb in value_bets:
