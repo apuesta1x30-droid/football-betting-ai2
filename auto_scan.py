@@ -42,11 +42,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-# MODO CENSO (hasta ver "🧮 Capa B activa"): registramos también opiniones
-# ligeramente negativas para alimentar la Capa B con muestra amplia y poco
-# sesgada, y acumular CLV. El PnL de esta ventana será ~-1..-3% por
-# construcción: SE IGNORA. Al arrancar la Capa B → volver a 2.0.
-EV_THRESHOLD_MIN = -2.0
+# Régimen normal: Capa B activa corrige probabilidades en vivo,
+# umbral de registro EV ≥ 2.0%.
+EV_THRESHOLD_MIN = 2.0
 
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
 # (temporada 26/27, n=738) del 12/09, en puntos porcentuales de probabilidad.
