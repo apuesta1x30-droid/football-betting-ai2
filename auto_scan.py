@@ -44,7 +44,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 # Régimen normal: Capa B activa corrige probabilidades en vivo,
 # umbral de registro EV ≥ 2.0%.
-EV_THRESHOLD_MIN = 2.0
+EV_THRESHOLD_MIN = 0.0
 
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
 # (temporada 26/27, n=738) del 12/09, en puntos porcentuales de probabilidad.
