@@ -83,7 +83,8 @@ def scan_edge():
             skipped_started += 1
             continue
         if len(muestra) < 10:
-            en_db = (home.lower() in team_db_lower and away.lower() in team_db_lower)
+            en_db = (resolve_team(home, team_db_lower) is not None
+                     and resolve_team(away, team_db_lower) is not None)
             muestra.append(f"{home} vs {away} @ {ct} | enDB={en_db}")
         home_key = resolve_team(home, team_db_lower)
         away_key = resolve_team(away, team_db_lower)
