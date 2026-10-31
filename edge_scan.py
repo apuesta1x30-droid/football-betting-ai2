@@ -31,6 +31,9 @@ MIN_BOOKS_STEAM = 4
 MIN_BOOKS_CONSENSUS = 6
 ODD_MIN, ODD_MAX = 1.4, 2.4
 SNAP_TABLE = 'odds_snapshots'
+SKIPPED_NO_DB = 0
+SKIPPED_NO_PRICES = 0
+PARTIES_EVALUADOS = 0
 
 
 def scan_edge():
@@ -75,7 +78,9 @@ def scan_edge():
         if mt.astimezone(ZoneInfo("Europe/Madrid")) <= now_es:
             continue
         if home.lower() not in team_db_lower or away.lower() not in team_db_lower:
+            SKIPPED_NO_DB += 1
             continue
+        PARTIES_EVALUADOS += 1
 
         # ---- agregar precios por resultado ----
         prices = {}
@@ -98,6 +103,7 @@ def scan_edge():
                     if key:
                         prices.setdefault(key, []).append(odd)
         if not prices:
+            SKIPPED_NO_PRICES += 1
             continue
 
         # ---- features y probabilidades del modelo ----
@@ -179,6 +185,9 @@ def scan_edge():
                              "consensus_edge_pct": round(cons, 2)},
             })
 
+    logger.info(f"⏭️ {SKIPPED_NO_DB} partidos omitidos (fuera de team_stats_db)")
+    logger.info(f"⏭️ {SKIPPED_NO_PRICES} partidos sin cuotas en ventana {ODD_MIN}-{ODD_MAX}")
+    logger.info(f"✅ {PARTIES_EVALUADOS} partidos evaluables procesados")  
     logger.info(f"📸 {snaps} snapshots escritos/actualizados")
     logger.info(f"🎯 {len(picks)} picks de edge detectados")
     if picks:
