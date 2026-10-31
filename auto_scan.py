@@ -26,6 +26,7 @@ import sys
 import time
 import json
 import logging
+import unicodedata
 import requests
 import joblib
 import pandas as pd
