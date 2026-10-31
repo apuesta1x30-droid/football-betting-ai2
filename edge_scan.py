@@ -20,7 +20,8 @@ from stats_tracker import StatsTracker
 from odds_client import odds_get, get_keys
 from auto_scan import (load_models, load_team_database, get_team_stats,
                        compute_recalib, SEED_CALIB_PP, load_auto_tune_config,
-                       format_value_bet_alert, send_telegram_message)
+                       format_value_bet_alert, send_telegram_message,
+                       resolve_team)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -84,7 +85,9 @@ def scan_edge():
         if len(muestra) < 10:
             en_db = (home.lower() in team_db_lower and away.lower() in team_db_lower)
             muestra.append(f"{home} vs {away} @ {ct} | enDB={en_db}")
-        if home.lower() not in team_db_lower or away.lower() not in team_db_lower:
+        home_key = resolve_team(home, team_db_lower)
+        away_key = resolve_team(away, team_db_lower)
+        if home_key is None or away_key is None:
             skipped_no_db += 1
             continue
         evaluados += 1
@@ -114,8 +117,8 @@ def scan_edge():
             continue
 
         # ---- features y probabilidades del modelo ----
-        hs = get_team_stats(home, team_db)
-        as_ = get_team_stats(away, team_db)
+        hs = get_team_stats(home_key, team_db)
+        as_ = get_team_stats(away_key, team_db)
         features = pd.DataFrame([{
             'Home_Form_Pts': hs['Last_Form_Pts'], 'Away_Form_Pts': as_['Last_Form_Pts'],
             'Form_Diff': hs['Last_Form_Pts'] - as_['Last_Form_Pts'],
