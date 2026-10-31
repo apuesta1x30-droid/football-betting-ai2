@@ -265,6 +265,28 @@ def get_team_stats(team_name, team_db):
             return stats
     return default_stats.copy()
 
+def normalize_name(name):
+    s = unicodedata.normalize('NFKD', str(name))
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    for p in ('.', "'", '-', '_', '&'):
+        s = s.replace(p, ' ')
+    return ' '.join(s.split())
+
+
+def resolve_team(name, team_db_lower):
+    """Devuelve la clave canónica en team_db_lower, o None.
+    Prioridad: coincidencia exacta → contención (gana el nombre más largo).
+    Ej.: 'Borussia Dortmund' → 'dortmund', 'AS Roma' → 'roma'."""
+    n = normalize_name(name)
+    if n in team_db_lower:
+        return n
+    best, best_len = None, 0
+    for db in team_db_lower:
+        if len(db) >= 4 and len(n) >= 4 and (db in n or n in db):
+            if len(db) > best_len:
+                best, best_len = db, len(db)
+    return best
 
 def calculate_double_chance_probs(models, features):
     probs_1x2 = models['1x2'].predict_proba(features)[0]
@@ -349,13 +371,15 @@ def scan_value_bets():
         if match_time_es <= now_es:
             continue
         # Sin stats reales no hay predicción válida: se omite el partido
-        if home_team.lower() not in team_db_lower or away_team.lower() not in team_db_lower:
+        home_key = resolve_team(home_team, team_db_lower)
+        away_key = resolve_team(away_team, team_db_lower)
+        if home_key is None or away_key is None:
             skipped_nodb += 1
             continue
         stats['total'] += 1
 
-        home_stats = get_team_stats(home_team, team_db)
-        away_stats = get_team_stats(away_team, team_db)
+        home_stats = get_team_stats(home_key, team_db)
+        away_stats = get_team_stats(away_key, team_db)
         form_diff = home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7)
         goal_threat_diff = home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4)
         combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2
