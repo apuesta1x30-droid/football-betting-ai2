@@ -68,7 +68,9 @@ def scan_edge():
     snaps = 0
     skipped_no_db = 0
     skipped_no_prices = 0
+    skipped_started = 0
     evaluados = 0
+    muestra = []
 
     for ev in fixtures:
         league = ev.get("sport_title", "Unknown")
@@ -77,7 +79,11 @@ def scan_edge():
         mt = datetime.fromisoformat(ct.replace('Z', '+00:00')) if ct.endswith('Z') \
             else datetime.fromisoformat(ct)
         if mt.astimezone(ZoneInfo("Europe/Madrid")) <= now_es:
+            skipped_started += 1
             continue
+        if len(muestra) < 10:
+            en_db = (home.lower() in team_db_lower and away.lower() in team_db_lower)
+            muestra.append(f"{home} vs {away} @ {ct} | enDB={en_db}")
         if home.lower() not in team_db_lower or away.lower() not in team_db_lower:
             skipped_no_db += 1
             continue
@@ -186,6 +192,9 @@ def scan_edge():
                              "consensus_edge_pct": round(cons, 2)},
             })
 
+    logger.info(f"⏭️ {skipped_started} partidos ya comenzados (descartados)")
+    for m in muestra:
+        logger.info(f"   🔎 {m}")
     logger.info(f"⏭️ {skipped_no_db} partidos omitidos (fuera de team_stats_db)")
     logger.info(f"⏭️ {skipped_no_prices} partidos sin cuotas en ventana {ODD_MIN}-{ODD_MAX}")
     logger.info(f"✅ {evaluados} partidos evaluables procesados")
