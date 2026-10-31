@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-edge_scan.py · v1.1 · Pivot: edge por microestructura de mercado.
+edge_scan.py · v1.2 · Pivot: edge por microestructura de mercado.
 El modelo actúa como FILTRO, no como fuente. Dos señales:
   A) VAPOR: cuota acortada >= 4% desde el primer snapshot y el modelo confirma.
   B) CONSENSO: mejor precio >= 3.5% sobre la mediana de casas y el modelo
      da EV >= +2% a ese mejor precio.
-Registra en 'picks' con fuente 'Vapor (steam)' / 'Consenso (mejor precio)'.
+Registro con atribución:
+  - Si el pick de edge coincide (raw_hash) con un pick PENDIENTE del canal
+    modelo, se FUSIONA la fuente ('Modelo+Consenso (mejor precio)' /
+    'Modelo+Vapor (steam)') y se enriquecen sus features: señal doble.
+  - Si coincide con un pick ya liquidado, se omite.
+  - Si no coincide, se registra como pick de edge puro.
 Persiste odds_snapshots para medir drift entre ejecuciones.
-v1.1: contadores de diagnóstico como variables locales (fix UnboundLocalError).
+Resolución de nombres de equipo vía resolve_team (auto_scan).
+v1.2: fusión de atribución + resolvedor en muestra + import json.
 """
 import sys
+import json
 import logging
 import statistics
 import pandas as pd
@@ -86,6 +93,7 @@ def scan_edge():
             en_db = (resolve_team(home, team_db_lower) is not None
                      and resolve_team(away, team_db_lower) is not None)
             muestra.append(f"{home} vs {away} @ {ct} | enDB={en_db}")
+
         home_key = resolve_team(home, team_db_lower)
         away_key = resolve_team(away, team_db_lower)
         if home_key is None or away_key is None:
@@ -204,17 +212,48 @@ def scan_edge():
     logger.info(f"✅ {evaluados} partidos evaluables procesados")
     logger.info(f"📸 {snaps} snapshots escritos/actualizados")
     logger.info(f"🎯 {len(picks)} picks de edge detectados")
-    if picks:
-        if safety_mode:
-            send_telegram_message(
-                "🚫 <b>MODO SEGURIDAD ACTIVO</b>\nPicks de edge solo para "
-                "registro y validación: NO apostar dinero real todavía.")
-        for vb in sorted(picks, key=lambda x: -x['EV (%)'])[:10]:
-            send_telegram_message(format_value_bet_alert(vb, cfg['kelly']))
-        reg = sum(1 for vb in picks if tracker.register_pick(vb))
-        logger.info(f"💾 {reg} picks de edge registrados")
-    else:
+
+    if not picks:
         send_telegram_message("💤 <b>Edge scan</b>\nSin señales de vapor/consenso en esta pasada.")
+        return 0
+
+    if safety_mode:
+        send_telegram_message(
+            "🚫 <b>MODO SEGURIDAD ACTIVO</b>\nPicks de edge solo para "
+            "registro y validación: NO apostar dinero real todavía.")
+
+    # Registro con atribución: si ya existe un pick PENDIENTE del canal modelo
+    # para el mismo partido+mercado+hora, se FUSIONA la fuente (señal doble:
+    # modelo + microestructura) en vez de duplicar la fila.
+    todos = tracker.get_all_picks()
+    por_hash = {p.get('raw_hash'): p for p in todos}
+    registrados, fusionados, saltados = 0, 0, 0
+    for vb in sorted(picks, key=lambda x: -x['EV (%)'])[:10]:
+        h = tracker.hash_pick(vb)
+        existing = por_hash.get(h)
+        if existing and existing.get('status') == 'pending':
+            vb['Fuente'] = 'Modelo+' + vb['Fuente']
+            feats = existing.get('features') or {}
+            if isinstance(feats, str):
+                try:
+                    feats = json.loads(feats)
+                except Exception:
+                    feats = {}
+            feats.update(vb['Features'])
+            (tracker.client.table(tracker.table)
+             .update({'fuente': vb['Fuente'], 'features': feats})
+             .eq('id', existing['id']).execute())
+            fusionados += 1
+            send_telegram_message(format_value_bet_alert(vb, cfg['kelly']))
+        elif existing:
+            saltados += 1  # ya liquidado en otra época: no se toca
+        else:
+            if tracker.register_pick(vb):
+                registrados += 1
+                send_telegram_message(format_value_bet_alert(vb, cfg['kelly']))
+    logger.info(f"💾 {registrados} picks de edge registrados · "
+                f"{fusionados} fusionados con el modelo · "
+                f"{saltados} omitidos (ya liquidados)")
     return 0
 
 
