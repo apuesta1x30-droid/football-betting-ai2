@@ -275,18 +275,16 @@ def normalize_name(name):
     return ' '.join(s.split())
 
 
-def resolve_team(name, team_db_lower):
-    """Devuelve la clave canónica en team_db_lower, o None.
-    Prioridad: coincidencia exacta → contención (gana el nombre más largo).
-    Ej.: 'Borussia Dortmund' → 'dortmund', 'AS Roma' → 'roma'."""
+def resolve_team(name, team_db_norm):
+    """team_db_norm: {nombre_normalizado: nombre_original}."""
     n = normalize_name(name)
-    if n in team_db_lower:
-        return n
+    if n in team_db_norm:
+        return team_db_norm[n]
     best, best_len = None, 0
-    for db in team_db_lower:
-        if len(db) >= 4 and len(n) >= 4 and (db in n or n in db):
-            if len(db) > best_len:
-                best, best_len = db, len(db)
+    for norm_key, orig in team_db_norm.items():
+        if len(norm_key) >= 4 and len(n) >= 4 and (norm_key in n or n in norm_key):
+            if len(norm_key) > best_len:
+                best, best_len = orig, len(norm_key)
     return best
 
 def calculate_double_chance_probs(models, features):
@@ -330,7 +328,7 @@ def scan_value_bets():
     if not models:
         return 1
     team_db = load_team_database()
-    team_db_lower = {str(t).lower() for t in team_db}
+    team_db_norm = {normalize_name(t): t for t in team_db}
     skipped_nodb = 0
 
     # Capa B: recalibración empírica de probabilidades
