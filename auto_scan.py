@@ -370,8 +370,8 @@ def scan_value_bets():
         if match_time_es <= now_es:
             continue
         # Sin stats reales no hay predicción válida: se omite el partido
-        home_key = resolve_team(home_team, team_db_lower)
-        away_key = resolve_team(away_team, team_db_lower)
+        home_key = resolve_team(home_team, team_db_norm)
+        away_key = resolve_team(away_team, team_db_norm)
         if home_key is None or away_key is None:
             skipped_nodb += 1
             continue
