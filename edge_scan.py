@@ -54,7 +54,7 @@ def scan_edge():
     if not models:
         return 1
     team_db = load_team_database()
-    team_db_lower = {str(t).lower() for t in team_db}
+    team_db_norm = {normalize_name(t): t for t in team_db}
     recalib = compute_recalib(tracker)
     if recalib:
         logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + {recalib['beta']:.2f}·p")
@@ -90,12 +90,12 @@ def scan_edge():
             skipped_started += 1
             continue
         if len(muestra) < 10:
-            en_db = (resolve_team(home, team_db_lower) is not None
-                     and resolve_team(away, team_db_lower) is not None)
+            en_db = (resolve_team(home, team_db_norm) is not None
+                     and resolve_team(away, team_db_norm) is not None)
             muestra.append(f"{home} vs {away} @ {ct} | enDB={en_db}")
 
-        home_key = resolve_team(home, team_db_lower)
-        away_key = resolve_team(away, team_db_lower)
+        home_key = resolve_team(home, team_db_norm)
+        away_key = resolve_team(away, team_db_norm)
         if home_key is None or away_key is None:
             skipped_no_db += 1
             continue
