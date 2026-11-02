@@ -28,7 +28,7 @@ from odds_client import odds_get, get_keys
 from auto_scan import (load_models, load_team_database, get_team_stats,
                        compute_recalib, SEED_CALIB_PP, load_auto_tune_config,
                        format_value_bet_alert, send_telegram_message,
-                       resolve_team)
+                       resolve_team, normalize_name)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
