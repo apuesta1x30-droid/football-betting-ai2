@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '0 12 * * *'
     - cron: '0 20 * * *'
+    - cron: '0 23 * * *'   # 00:00 Madrid: cierre de kickoffs nocturnos
   workflow_dispatch:
     inputs:
       test:
