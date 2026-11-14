@@ -62,7 +62,7 @@ SEED_CALIB_PP = {
 
 DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
-MAX_STAKE = 0.03  # techo duro: nunca más del 3% de banca por pick
+MAX_STAKE = 0.010   # rampa real 14/11-12/12: tope 1% por pick (CLV modelo -1.5%)
 META_KEY_AUTO_TUNE = 'auto_tune'
 
 
