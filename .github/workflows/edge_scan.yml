@@ -1,8 +1,8 @@
 name: Edge Scan
 on:
   schedule:
-    - cron: '0 10 * * *'   # 11:00 Madrid
-    - cron: '0 18 * * *'   # 19:00 Madrid
+   # - cron: '0 10 * * *'   # 11:00 Madrid
+   # - cron: '0 18 * * *'   # 19:00 Madrid
   workflow_dispatch:
 jobs:
   scan:
