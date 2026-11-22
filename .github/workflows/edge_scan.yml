@@ -1,18 +1,26 @@
 name: Edge Scan
+
 on:
-  schedule:
-   # - cron: '0 10 * * *'   # 11:00 Madrid
-   # - cron: '0 18 * * *'   # 19:00 Madrid
+  # Pausado desde 14/11 (CLV -1.64% / yield -0.233).
+  # Reactivación prevista 1/12 en modo solo-fusión:
+  # descomentar 'schedule:' y los dos cron.
+  # schedule:
+  #   - cron: '0 10 * * *'
+  #   - cron: '0 18 * * *'
   workflow_dispatch:
+
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: |
+      - name: Install dependencies
+        run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run edge scan
