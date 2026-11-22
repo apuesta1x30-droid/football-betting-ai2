@@ -2,9 +2,11 @@ name: Closing Odds (CLV)
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '30 4 * * *'    # tras auto_scan 04:16 UTC
+    - cron: '0 8 * * *'
+    - cron: '30 14 * * *'   # tras auto_scan 14:16 UTC
     - cron: '0 20 * * *'
-    - cron: '0 23 * * *'   # 00:00 Madrid: cierre de kickoffs nocturnos
+    - cron: '0 23 * * *'
   workflow_dispatch:
     inputs:
       test:
