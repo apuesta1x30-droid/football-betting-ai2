@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-v0.4-D · Captura de cuota de cierre para el cálculo de CLV.
-Para picks pendientes con kickoff en las próximas WINDOW_HOURS,
-consulta The Odds API y guarda la mejor cuota actual como closing_odds.
-
-CLV = (cuota_tomada / cuota_cierre - 1) * 100 → positivo = bates al mercado.
-Mercados con cierre: 1X2, Over FT y Over 1ª Parte. (BTTS/DC quedan sin CLV en v1.)
-Modo --test: calcula y loguea sin guardar (para verificar sin ensuciar datos).
-
-Ahora usa odds_client.py para rotación de claves y contador mensual.
+v0.5 · Captura de cuota de cierre para CLV.
+Cambios vs v0.4-D:
+  - Ventana ampliada a [-1h, +10h] respecto al kickoff: desde 10h antes
+    hasta 1h después (por si el kickoff ya empezó y la cuota se fijó).
+  - Sobrescribe closing_odds en cada captura: el último run antes del
+    kickoff gana y captura el precio más cercano al cierre real.
+  - Excluye del CLV (marca como 'late_bet') picks registrados a menos
+    de 2h del kickoff: su CLV es 0% por construcción, no por edge.
+  - Añadidos crons complementarios en closing_odds.yml.
+Usa odds_client.py para rotación de claves y contador mensual.
 """
 import os
 import re
@@ -27,7 +28,15 @@ from odds_client import odds_get, get_keys
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-WINDOW_HOURS = 6.0
+# Ventana de captura: desde 10h ANTES del kickoff hasta 1h DESPUÉS.
+# Así, con 5 crons/día, todo pick tiene múltiples oportunidades de captura.
+WINDOW_BEFORE_HOURS = 10.0
+WINDOW_AFTER_HOURS  = 1.0
+
+# Picks registrados a menos de 2h del kickoff: su CLV es 0% por construcción
+# (el mercado apenas tuvo tiempo de moverse). Se marcan y excluyen del CLV.
+LATE_BET_HOURS = 2.0
+
 META_SPORTS_KEY = 'odds_api_sports_map'
 
 
@@ -44,7 +53,7 @@ def get_sports_map(tracker):
         logger.debug(f"Caché de deportes no disponible: {e}")
     r = odds_get("sports/", tracker=tracker)
     if r is None or r.status_code != 200:
-        logger.error(f"Error listando deportes (todas las claves agotadas)")
+        logger.error("Error listando deportes (todas las claves agotadas)")
         return {}
     mapping = {s['title']: s['key'] for s in r.json() if s.get('active')}
     tracker.client.table('meta').upsert(
@@ -57,7 +66,6 @@ def get_sports_map(tracker):
 def market_target(mercado, home, away):
     """Devuelve (market_key, outcome_name, point) o None si el mercado no tiene cierre."""
     m = _norm(mercado)
-    # Mercados de 1ª Parte no tienen endpoint de cierre fiable en The Odds API v4.
     if '1a parte' in m or 'primera parte' in m:
         return None
     mo = re.match(r'over\s+(\d+(?:\.\d+)?)\s+goles', m)
@@ -71,7 +79,7 @@ def market_target(mercado, home, away):
             return ('h2h', home, None)
         if sel == _norm(away):
             return ('h2h', away, None)
-    return None  # BTTS / Doble Oportunidad → sin CLV en v1
+    return None
 
 
 def extract_closing(event, mk, out_name, point):
@@ -104,19 +112,27 @@ def run(test=False):
     now_madrid = now.astimezone(ZoneInfo("Europe/Madrid"))
 
     cand = []
+    late_bets = 0
     for p in tracker.get_all_picks():
-        if p['status'] != 'pending' or p.get('closing_odds'):
+        if p['status'] != 'pending':
             continue
         dt = pick_match_dt(p)
         if not dt:
             continue
-        if test:
-            if dt > now_madrid:
-                cand.append(p)
-        elif timedelta(0) <= (dt - now_madrid) <= timedelta(hours=WINDOW_HOURS):
+        # Marcar late_bets en el primer pase (solo una vez por pick)
+        hours_to_kickoff = (dt - now_madrid).total_seconds() / 3600
+        if 0 < hours_to_kickoff < LATE_BET_HOURS and not p.get('late_bet'):
+            if not test:
+                (tracker.client.table(tracker.table)
+                 .update({'late_bet': True}).eq('id', p['id']).execute())
+            late_bets += 1
+            continue
+        # Ventana ampliada: [-1h, +10h] respecto al kickoff
+        if -WINDOW_AFTER_HOURS <= hours_to_kickoff <= WINDOW_BEFORE_HOURS:
             cand.append(p)
 
-    logger.info(f"🔎 Picks en ventana de cierre: {len(cand)}")
+    logger.info(f"🔎 Picks en ventana de cierre: {len(cand)} · "
+                f"late_bets marcados este run: {late_bets}")
     if not cand:
         return 0
 
@@ -126,6 +142,7 @@ def run(test=False):
     for p in cand:
         by_league.setdefault(p['liga'], []).append(p)
 
+    captured = 0
     for liga, plist in by_league.items():
         sport_key = sports_map.get(liga)
         if not sport_key:
@@ -168,12 +185,17 @@ def run(test=False):
                             f"tomada {p['cuota']:.2f} | cierre {closing:.2f} | CLV {clv:+.1f}%")
                 continue
 
-            tracker.client.table(tracker.table).update({
-                'closing_odds': closing,
-                'captured_closing_at': now.isoformat()
-            }).eq('id', p['id']).execute()
-            logger.info(f"🔻 #{p['id']} cierre {closing:.2f} (tomada {p['cuota']:.2f}) → CLV {clv:+.1f}%")
+            # Sobrescritura: cada run actualiza con la cuota más reciente
+            (tracker.client.table(tracker.table)
+             .update({
+                 'closing_odds': closing,
+                 'captured_closing_at': now.isoformat()
+             }).eq('id', p['id']).execute())
+            captured += 1
+            logger.info(f"🔻 #{p['id']} cierre {closing:.2f} "
+                        f"(tomada {p['cuota']:.2f}) → CLV {clv:+.1f}%")
 
+    logger.info(f"✅ Capturas realizadas este run: {captured}")
     return 0
 
 
