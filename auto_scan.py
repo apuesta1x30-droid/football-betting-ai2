@@ -4,7 +4,7 @@ v0.9 · Escaneo automático de value bets con auto-ajuste dinámico.
 - Régimen normal: EV_THRESHOLD_MIN = 2.0 con Capa B activa corrigiendo probs.
 - CORTACIRCUITOS POR FAMILIA (28/11): pausa Overs o 1X2 si su yield en los
   últimos 30 liquidados es < -0.15 u. La cuarentena se levanta sola cuando
-  el yield se recupera.
+  el yield de la familia se recupera.
 - Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase.
 - Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV).
 - Modo seguridad (gap > +10): banner de aviso y picks solo para registro.
@@ -16,7 +16,8 @@ v0.9 · Escaneo automático de value bets con auto-ajuste dinámico.
 - Lista negra empírica de ligas (n≥8 y PnL≤-5).
 - The Odds API con rotación de claves (odds_client).
 - Capa B viva (recalibración con picks liquidados post-despliegue) y,
-  mientras está inactiva, Capa B SEMILLA (sesgo medido fuera de muestra).
+  mientras está inactiva, Capa B SEMILLA (sesgo medido fuera de muestra
+  en la validación temporal del 12/09, n=738).
 - Techo duro de stake MAX_STAKE (rampa 1% hasta la revisión del 12/12).
 - Ventana de cuotas 1.4-2.4 (decisión del usuario).
 """
@@ -536,12 +537,15 @@ def scan_value_bets():
 
     # ---- Cortacircuitos por familia (28/11): cuarentena automática ----
     fam_paused = family_circuit_breaker(tracker)
-    if any(fam_paused.values()):
-        logger.info(f"🛑 Cortacircuitos: familias pausadas = "
-                    f"{[k for k, v in fam_paused.items() if v]}")
-        value_bets = [vb for vb in value_bets
-                      if not fam_paused.get(
-                          'Overs' if vb['Mercado'].startswith('Over') else '1X2')]
+    pausadas = [k for k, v in fam_paused.items() if v]
+    if pausadas:
+        logger.info("🛑 Cortacircuitos: familias pausadas = " + str(pausadas))
+        filtrados = []
+        for vb in value_bets:
+            fam = 'Overs' if vb['Mercado'].startswith('Over') else '1X2'
+            if not fam_paused.get(fam):
+                filtrados.append(vb)
+        value_bets = filtrados
 
     if stats.get('max_ev_detail'):
         logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats['max_ev']:+.1f}% "
