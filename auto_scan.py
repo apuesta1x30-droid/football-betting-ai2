@@ -304,6 +304,23 @@ def calculate_over05_ht_prob(prob_over25):
     prob_method2 = 1 - poisson.pmf(0, expected_goals_ht)
     return (prob_method1 * 0.4) + (prob_method2 * 0.6)
 
+def family_circuit_breaker(tracker):
+    """Pausa una familia (Overs/1X2) si su yield en los últimos 30
+    liquidados es < -0.15 u. Contención de daños por mercado.
+    La cuarentena se levanta sola cuando el yield se recupera."""
+    picks = [p for p in tracker.get_all_picks() if p.get('status') in ('won', 'lost')]
+    out = {}
+    for fam, pred in (('Overs', lambda m: m.startswith('Over')),
+                      ('1X2', lambda m: not m.startswith('Over'))):
+        rows = [p for p in picks if pred(p.get('mercado') or '')]
+        rows.sort(key=lambda p: p.get('id') or 0, reverse=True)
+        rows = rows[:30]
+        if len(rows) < 15:
+            out[fam] = False
+            continue
+        units = sum((float(p['cuota']) - 1) if p['status'] == 'won' else -1.0 for p in rows)
+        out[fam] = (units / len(rows)) < -0.15
+    return out
 
 def scan_value_bets():
     logger.info("🚀 Iniciando escaneo automático...")
@@ -524,6 +541,14 @@ def scan_value_bets():
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
         top10 = sorted(
             [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
+            # ---- Cortacircuitos por familia (28/11): cuarentena automática ----
+            fam_paused = family_circuit_breaker(tracker)
+            if any(fam_paused.values()):
+              logger.info(f"🛑 Cortacircuitos: familias pausadas = "
+                    f"{[k for k, v in fam_paused.items() if v]}")
+              value_bets = [vb for vb in value_bets
+                      if not fam_paused.get(
+                          'Overs' if vb['Mercado'].startswith('Over') else '1X2')]
             key=lambda x: -x['EV (%)']
         )[:10]
         if safety_mode:
