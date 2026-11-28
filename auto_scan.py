@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """
-v0.8 · Escaneo automático de value bets con auto-ajuste dinámico.
-- MODO CENSO ACTIVO (EV_THRESHOLD_MIN = -2.0): registra también opiniones
-  ligeramente negativas para alimentar la Capa B con muestra amplia y poco
-  sesgada, y acumular CLV. Al ver "🧮 Capa B activa" → volver a 2.0.
-- Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase
-- Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV)
-- Modo seguridad (gap > +10): envía banner de aviso PERO notifica los picks
-  en formato normal para poder liquidarlos manualmente con 👌/👎
-- Registra picks en Supabase con features del modelo y message_id de Telegram
-- Filtra por hora actual (solo partidos futuros)
-- OMITE partidos con algún equipo fuera de team_stats_db (sin stats reales
-  no hay predicción válida: evita picks artefacto con features por defecto)
-- Deduplica picks ya alertados (no re-alerta en scans posteriores)
-- Lista negra empírica de ligas (n≥8 y PnL≤-5)
-- The Odds API con rotación de claves (odds_client)
+v0.9 · Escaneo automático de value bets con auto-ajuste dinámico.
+- Régimen normal: EV_THRESHOLD_MIN = 2.0 con Capa B activa corrigiendo probs.
+- CORTACIRCUITOS POR FAMILIA (28/11): pausa Overs o 1X2 si su yield en los
+  últimos 30 liquidados es < -0.15 u. La cuarentena se levanta sola cuando
+  el yield se recupera.
+- Lee configuración de auto_tune.py (EV mínimo + Kelly) desde Supabase.
+- Envía alertas a Telegram (máx 10 por escaneo, las de mayor EV).
+- Modo seguridad (gap > +10): banner de aviso y picks solo para registro.
+- Registra picks en Supabase con features del modelo y message_id de Telegram.
+- Filtra por hora actual (solo partidos futuros).
+- OMITE partidos con algún equipo fuera de team_stats_db (resolve_team con
+  normalización y contención para nombres de API vs CSV).
+- Deduplica picks ya alertados (no re-alerta en scans posteriores).
+- Lista negra empírica de ligas (n≥8 y PnL≤-5).
+- The Odds API con rotación de claves (odds_client).
 - Capa B viva (recalibración con picks liquidados post-despliegue) y,
-  mientras está inactiva, Capa B SEMILLA (sesgo medido fuera de muestra
-  en la validación temporal del 12/09, n=738)
-- Techo duro de stake MAX_STAKE = 3% de banca por pick
-- Ventana de cuotas 1.4-2.4 (decisión del usuario)
+  mientras está inactiva, Capa B SEMILLA (sesgo medido fuera de muestra).
+- Techo duro de stake MAX_STAKE (rampa 1% hasta la revisión del 12/12).
+- Ventana de cuotas 1.4-2.4 (decisión del usuario).
 """
 import os
 import sys
@@ -34,6 +33,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from scipy.stats import poisson
+
 from stats_tracker import StatsTracker
 from odds_client import odds_get, get_keys
 
@@ -43,15 +43,13 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-# Régimen normal: Capa B activa corrige probabilidades en vivo,
-# umbral de registro EV ≥ 2.0%.
+# Régimen normal: Capa B activa corrige probabilidades en vivo.
 EV_THRESHOLD_MIN = 2.0
 
 # Capa B SEMILLA: sesgo medido FUERA DE MUESTRA en la validación temporal
 # (temporada 26/27, n=738) del 12/09, en puntos porcentuales de probabilidad.
 # Solo actúa mientras la Capa B viva está inactiva; al arrancar ella
 # (30 liquidados post-despliegue), la semilla se apaga sola.
-# 1X2 y DC/HT se dejan sin semilla: su sesgo no es aditivo uniforme.
 SEED_CALIB_PP = {
     'Over 1.5 Goles': +1.2,
     'Over 2.5 Goles': +3.6,
@@ -62,16 +60,19 @@ SEED_CALIB_PP = {
 
 DEFAULT_EV_NOTIFY = 10.0
 DEFAULT_KELLY = 4
-MAX_STAKE = 0.010   # rampa real 14/11-12/12: tope 1% por pick (CLV modelo -1.5%)
+MAX_STAKE = 0.010   # rampa real 14/11-12/12: tope 1% por pick (revisión 12/12)
+
 META_KEY_AUTO_TUNE = 'auto_tune'
 
 
 def load_auto_tune_config(tracker):
-    cfg = {'ev_notify': DEFAULT_EV_NOTIFY, 'kelly': DEFAULT_KELLY, 'gap': None, 'n': None}
+    cfg = {'ev_notify': DEFAULT_EV_NOTIFY, 'kelly': DEFAULT_KELLY,
+           'gap': None, 'n': None}
     if not tracker or not tracker.enabled:
         return cfg
     try:
-        resp = tracker.client.table('meta').select('value').eq('key', META_KEY_AUTO_TUNE).execute()
+        resp = tracker.client.table('meta').select('value') \
+            .eq('key', META_KEY_AUTO_TUNE).execute()
         if resp.data:
             data = json.loads(resp.data[0]['value'])
             saved = data.get('cfg', {})
@@ -108,7 +109,6 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
     if not tracker or not tracker.enabled:
         return None
     cutoff_date = datetime.now(timezone.utc) - timedelta(weeks=weeks_back)
-    # Si hay modelos nuevos desplegados, usar solo picks posteriores a ellos
     try:
         resp = tracker.client.table('meta').select('value') \
             .eq('key', 'model_deployed_at').execute()
@@ -118,8 +118,8 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
                 deploy = deploy.replace(tzinfo=timezone.utc)
             if deploy > cutoff_date:
                 cutoff_date = deploy
-                logger.info(f"🏷️ Capa B: usando solo picks posteriores al "
-                            f"despliegue de modelos ({deploy:%d/%m})")
+            logger.info(f"🏷️ Capa B: usando solo picks posteriores al "
+                        f"despliegue de modelos ({deploy:%d/%m})")
     except Exception:
         pass
     xs, ys = [], []
@@ -139,7 +139,8 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
             continue
     n = len(xs)
     if n < min_n:
-        logger.info(f"🧮 Capa B: insuficientes picks recientes ({n}/{min_n} en últimas {weeks_back} semanas)")
+        logger.info(f"🧮 Capa B: insuficientes picks recientes "
+                    f"({n}/{min_n} en últimas {weeks_back} semanas)")
         return None
     mx = sum(xs) / n
     my = sum(ys) / n
@@ -148,7 +149,8 @@ def compute_recalib(tracker, min_n=30, weeks_back=4):
         return None
     beta = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
     alpha = my - beta * mx
-    logger.info(f"🧮 Capa B (últimas {weeks_back} semanas): p_corr = {alpha:.3f} + {beta:.3f}·p (n={n})")
+    logger.info(f"🧮 Capa B (últimas {weeks_back} semanas): "
+                f"p_corr = {alpha:.3f} + {beta:.3f}·p (n={n})")
     return {'alpha': alpha, 'beta': beta, 'n': n}
 
 
@@ -185,7 +187,7 @@ def calculate_kelly_stake(prob, odd, fraction=4):
 
 def format_value_bet_alert(vb, kelly_fraction):
     stake = calculate_kelly_stake(vb['Prob. IA'], vb['Cuota'], fraction=kelly_fraction)
-    tope = ' · tope 3% aplicado' if stake >= MAX_STAKE - 1e-9 else ''
+    tope = f' · tope {MAX_STAKE:.0%} aplicado' if stake >= MAX_STAKE - 1e-9 else ''
     return (
         f"🎯 <b>VALUE BET DETECTADA</b>\n"
         f"🏆 <b>{vb['Liga']}</b>\n"
@@ -196,7 +198,8 @@ def format_value_bet_alert(vb, kelly_fraction):
         f"🤖 Prob. IA: <b>{vb['Prob. IA']:.1%}</b>\n"
         f"🏠 Prob. Casa: <b>{vb['Prob. Casa']:.1%}</b>\n"
         f"📈 <b>EV: {vb['EV (%)']:+.1f}%</b>\n"
-        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca (Kelly 1/{kelly_fraction}{tope})\n"
+        f"💵 Stake sugerido: <b>{stake:.1%}</b> de banca "
+        f"(Kelly 1/{kelly_fraction}{tope})\n"
         f"🔖 Fuente: {vb['Fuente']}"
     )
 
@@ -266,6 +269,7 @@ def get_team_stats(team_name, team_db):
             return stats
     return default_stats.copy()
 
+
 def normalize_name(name):
     s = unicodedata.normalize('NFKD', str(name))
     s = ''.join(c for c in s if not unicodedata.combining(c))
@@ -287,6 +291,7 @@ def resolve_team(name, team_db_norm):
                 best, best_len = orig, len(norm_key)
     return best
 
+
 def calculate_double_chance_probs(models, features):
     probs_1x2 = models['1x2'].predict_proba(features)[0]
     return {
@@ -304,10 +309,10 @@ def calculate_over05_ht_prob(prob_over25):
     prob_method2 = 1 - poisson.pmf(0, expected_goals_ht)
     return (prob_method1 * 0.4) + (prob_method2 * 0.6)
 
+
 def family_circuit_breaker(tracker):
-    """Pausa una familia (Overs/1X2) si su yield en los últimos 30
-    liquidados es < -0.15 u. Contención de daños por mercado.
-    La cuarentena se levanta sola cuando el yield se recupera."""
+    # Pausa una familia (Overs/1X2) si su yield en los ultimos 30
+    # liquidados es menor que -0.15 unidades.
     picks = [p for p in tracker.get_all_picks() if p.get('status') in ('won', 'lost')]
     out = {}
     for fam, pred in (('Overs', lambda m: m.startswith('Over')),
@@ -318,16 +323,21 @@ def family_circuit_breaker(tracker):
         if len(rows) < 15:
             out[fam] = False
             continue
-        units = sum((float(p['cuota']) - 1) if p['status'] == 'won' else -1.0 for p in rows)
+        units = 0.0
+        for p in rows:
+            if p['status'] == 'won':
+                units += float(p['cuota']) - 1.0
+            else:
+                units -= 1.0
         out[fam] = (units / len(rows)) < -0.15
     return out
+
 
 def scan_value_bets():
     logger.info("🚀 Iniciando escaneo automático...")
     if not get_keys():
         logger.error("❌ No hay claves de The Odds API configuradas")
         return 1
-
     tracker = StatsTracker()
     cfg = load_auto_tune_config(tracker)
     ev_notify = cfg['ev_notify']
@@ -340,7 +350,6 @@ def scan_value_bets():
     if safety_mode:
         logger.info(f"🚫 MODO SEGURIDAD: gap {cfg['gap']:+.1f} pp > +10 → "
                     f"aviso enviado, picks notificados para liquidación manual")
-
     models = load_models()
     if not models:
         return 1
@@ -351,7 +360,8 @@ def scan_value_bets():
     # Capa B: recalibración empírica de probabilidades
     recalib = compute_recalib(tracker)
     if recalib:
-        logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + {recalib['beta']:.2f}·p (n={recalib['n']})")
+        logger.info(f"🧮 Capa B activa: p_corr = {recalib['alpha']:.2f} + "
+                    f"{recalib['beta']:.2f}·p (n={recalib['n']})")
     else:
         logger.info("🧮 Capa B inactiva (n<30 liquidados de la época actual); usará semilla")
 
@@ -363,7 +373,6 @@ def scan_value_bets():
     if response is None or response.status_code != 200:
         logger.error("❌ Error The Odds API (claves agotadas o tope mensual)")
         return 1
-
     fixtures_data = response.json()
     logger.info(f"📡 {len(fixtures_data)} partidos obtenidos")
 
@@ -386,6 +395,7 @@ def scan_value_bets():
         now_es = now.astimezone(ZoneInfo("Europe/Madrid"))
         if match_time_es <= now_es:
             continue
+
         # Sin stats reales no hay predicción válida: se omite el partido
         home_key = resolve_team(home_team, team_db_norm)
         away_key = resolve_team(away_team, team_db_norm)
@@ -397,10 +407,12 @@ def scan_value_bets():
         home_stats = get_team_stats(home_key, team_db)
         away_stats = get_team_stats(away_key, team_db)
         form_diff = home_stats.get('Last_Form_Pts', 7) - away_stats.get('Last_Form_Pts', 7)
-        goal_threat_diff = home_stats.get('Last_Goals_Scored_Avg', 1.4) - away_stats.get('Last_Goals_Conceded_Avg', 1.4)
-        combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50) + away_stats.get('Last_Over25_Rate', 0.50)) / 2
-        combined_btts = (home_stats.get('Last_BTTS_Rate', 0.50) + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
-
+        goal_threat_diff = (home_stats.get('Last_Goals_Scored_Avg', 1.4)
+                            - away_stats.get('Last_Goals_Conceded_Avg', 1.4))
+        combined_o25 = (home_stats.get('Last_Over25_Rate', 0.50)
+                        + away_stats.get('Last_Over25_Rate', 0.50)) / 2
+        combined_btts = (home_stats.get('Last_BTTS_Rate', 0.50)
+                         + away_stats.get('Last_BTTS_Rate', 0.50)) / 2
         features = pd.DataFrame([{
             'Home_Form_Pts': home_stats.get('Last_Form_Pts', 7),
             'Away_Form_Pts': away_stats.get('Last_Form_Pts', 7),
@@ -448,7 +460,6 @@ def scan_value_bets():
             prob = None
             mercado_name = None
             is_calculated = '_CALC' in market_key
-
             if market_key.startswith("1X2_"):
                 team_part = market_key.split("_", 1)[1]
                 if team_part == home_team:
@@ -471,24 +482,19 @@ def scan_value_bets():
             elif market_key.startswith("DC_"):
                 dc_type = market_key.replace("DC_", "").replace("_CALC", "")
                 if dc_type == "1X":
-                    prob = dc_probs['1X']
-                    mercado_name = "Doble Oportunidad - 1X"
+                    prob, mercado_name = dc_probs['1X'], "Doble Oportunidad - 1X"
                 elif dc_type == "X2":
-                    prob = dc_probs['X2']
-                    mercado_name = "Doble Oportunidad - X2"
+                    prob, mercado_name = dc_probs['X2'], "Doble Oportunidad - X2"
                 elif dc_type == "12":
-                    prob = dc_probs['12']
-                    mercado_name = "Doble Oportunidad - 12"
+                    prob, mercado_name = dc_probs['12'], "Doble Oportunidad - 12"
             elif market_key.startswith("HT_Over_0.5"):
-                prob = prob_over05_ht
-                mercado_name = "Over 0.5 Goles 1ª Parte"
+                prob, mercado_name = prob_over05_ht, "Over 0.5 Goles 1ª Parte"
             elif market_key.startswith("BTTS_"):
                 btts_type = market_key.split("_")[1]
                 if btts_type == "Yes":
                     prob, mercado_name = prob_btts, "BTTS - Sí (Ambos marcan)"
                 elif btts_type == "No":
                     prob, mercado_name = 1 - prob_btts, "BTTS - No"
-
             if prob is None:
                 continue
 
@@ -499,7 +505,6 @@ def scan_value_bets():
             else:
                 prob = max(0.03, min(0.97,
                                      prob + SEED_CALIB_PP.get(mercado_name, 0.0) / 100))
-
             ev = (prob * odd) - 1
             ev_percentage = ev * 100
 
@@ -508,7 +513,6 @@ def scan_value_bets():
                 stats['max_ev'] = ev_percentage
                 stats['max_ev_detail'] = f"{mercado_name} · {home_team} vs {away_team}"
 
-            # Filtro único de registro (en censo admite EV ligeramente negativo)
             if ev_percentage < EV_THRESHOLD_MIN:
                 logger.debug(f"⚠️ {home_team} vs {away_team} | {mercado_name}: "
                              f"EV {ev_percentage:+.1f}% bajo umbral {EV_THRESHOLD_MIN}%")
@@ -529,6 +533,16 @@ def scan_value_bets():
 
     if skipped_nodb:
         logger.info(f"⏭️ {skipped_nodb} partidos omitidos: algún equipo fuera de team_stats_db")
+
+    # ---- Cortacircuitos por familia (28/11): cuarentena automática ----
+    fam_paused = family_circuit_breaker(tracker)
+    if any(fam_paused.values()):
+        logger.info(f"🛑 Cortacircuitos: familias pausadas = "
+                    f"{[k for k, v in fam_paused.items() if v]}")
+        value_bets = [vb for vb in value_bets
+                      if not fam_paused.get(
+                          'Overs' if vb['Mercado'].startswith('Over') else '1X2')]
+
     if stats.get('max_ev_detail'):
         logger.info(f"🔍 Diagnóstico: EV máximo del escaneo = {stats['max_ev']:+.1f}% "
                     f"(umbral de registro: {EV_THRESHOLD_MIN}%) · "
@@ -541,14 +555,6 @@ def scan_value_bets():
         send_telegram_message(format_summary_message(stats, value_bets, cfg, len(blacklist)))
         top10 = sorted(
             [vb for vb in value_bets if vb['EV (%)'] >= ev_notify],
-            # ---- Cortacircuitos por familia (28/11): cuarentena automática ----
-            fam_paused = family_circuit_breaker(tracker)
-            if any(fam_paused.values()):
-              logger.info(f"🛑 Cortacircuitos: familias pausadas = "
-                    f"{[k for k, v in fam_paused.items() if v]}")
-              value_bets = [vb for vb in value_bets
-                      if not fam_paused.get(
-                          'Overs' if vb['Mercado'].startswith('Over') else '1X2')]
             key=lambda x: -x['EV (%)']
         )[:10]
         if safety_mode:
@@ -568,7 +574,8 @@ def scan_value_bets():
             for vb in top10:
                 h = tracker.hash_pick(vb)
                 if h in con_msg:
-                    logger.info(f"⏭️ Ya alertado en un escaneo previo: {vb['Partido']} | {vb['Mercado']}")
+                    logger.info(f"⏭️ Ya alertado en un escaneo previo: "
+                                f"{vb['Partido']} | {vb['Mercado']}")
                     continue
                 msg_id = send_telegram_message(format_value_bet_alert(vb, kelly_fraction))
                 if msg_id:
@@ -576,13 +583,12 @@ def scan_value_bets():
                     if h in sin_msg:
                         tracker.client.table(tracker.table).update(
                             {'telegram_message_id': msg_id}).eq('id', sin_msg[h]).execute()
-                time.sleep(0.5)
+                    time.sleep(0.5)
         else:
             send_telegram_message(
                 f"⚠️ <b>Sin apuestas de valor alto</b>\n"
-                f"📊 Hay <b>{len(value_bets)}</b> picks registrados en modo censo "
-                f"(EV {EV_THRESHOLD_MIN:.1f} a {ev_notify:.0f}%), "
-                f"ninguna supera el umbral de notificación (EV ≥ {ev_notify:.0f}%).\n"
+                f"📊 Hay <b>{len(value_bets)}</b> picks registrados bajo el umbral "
+                f"de notificación (EV ≥ {ev_notify:.0f}%).\n"
                 f"🤖 Config activa: Kelly 1/{kelly_fraction}\n"
                 f"💡 Alimentando la Capa B con muestra amplia."
             )
@@ -592,8 +598,8 @@ def scan_value_bets():
                 registered_count += 1
         logger.info(f"💾 {registered_count} picks registrados en base de datos")
     else:
-        send_telegram_message("💤 <b>Escaneo completado</b>\nSin Value Bets detectadas en las próximas horas.")
-
+        send_telegram_message("💤 <b>Escaneo completado</b>\n"
+                              "Sin Value Bets detectadas en las próximas horas.")
     return 0
 
 
